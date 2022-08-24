@@ -1,12 +1,13 @@
-use std::env;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::RwLock;
+use std::{env, sync::Arc};
+
+use tokio::sync::oneshot;
 
 use serde::{Deserialize, Serialize};
 
-use graph_db::{
-    GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex, MutateGraph,
-};
+use graph_db::{GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex};
 
 #[derive(
     Debug,
@@ -43,7 +44,7 @@ impl From<NodeTypes> for NodeKey {
 
 type Database = GraphDatabase<NodeTypes, EdgeType, NodeKey>;
 
-#[tokio::main]
+#[actix_rt::main]
 async fn main() -> Result<(), std::io::Error> {
     env_logger::init();
 
@@ -54,36 +55,66 @@ async fn main() -> Result<(), std::io::Error> {
     let server_address = SocketAddr::from_str(&server_address)
         .expect("provided DATABASE_URL was not valid");
 
-    let remote_addresses: Vec<String> = env::var("DATABASE_REMOTE_ADDRESSES")
-        .expect("DATABASE_REMOTE_ADDRESSES")
-        .split(',')
-        .map(String::from)
-        .collect();
+    let initial_remote_addresses: Vec<String> =
+        env::var("DATABASE_INITIAL_REMOTE_ADDRESSES")
+            .expect("DATABASE_INITIAL_REMOTE_ADDRESSES")
+            .split(',')
+            .map(String::from)
+            .collect();
 
-    let database =
-        Database::run(Some(store_path), server_address, remote_addresses)
-            .await
-            .unwrap();
+    let (tx, rx) = oneshot::channel::<Arc<RwLock<Database>>>();
+
+    // tokio::spawn(async move {
+    Database::run(
+        Some(store_path),
+        server_address,
+        initial_remote_addresses,
+        tx,
+    )
+    .await
+    .unwrap();
+    // });
+
+    let database = rx.await.unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
     {
-        let added_node = database
-            .write()
-            .unwrap()
-            .add_node(
-                NodeKey(1),
-                NodeTypes {
-                    id: 1,
-                    name: "First Node".to_string(),
-                },
-            )
-            .unwrap();
-
-        log::info!("Added node: {added_node:#?}");
+        if env::var("MAIN").is_ok() {
+            database
+                .write()
+                .unwrap()
+                .add_node(
+                    NodeKey(1),
+                    NodeTypes {
+                        id: 1,
+                        name: "First Node".to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        } else {
+            database
+                .write()
+                .unwrap()
+                .add_node(
+                    NodeKey(2),
+                    NodeTypes {
+                        id: 2,
+                        name: "Second Node".to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
     }
-    {
-        let graph = database.read().unwrap().get_graph().unwrap();
 
-        log::info!("Got graph: {graph:#?}");
-    }
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+    let graph = database.read().unwrap().get_graph().await.unwrap();
+    log::debug!("Resulting Graph: '{:?}'", graph);
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
 
     Ok(())
 }

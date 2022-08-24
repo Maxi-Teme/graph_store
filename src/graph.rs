@@ -2,13 +2,18 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use petgraph::stable_graph::{EdgeIndex, Neighbors, NodeIndex, StableGraph};
+use actix::{Actor, Context, Handler};
+
+use petgraph::stable_graph::{Neighbors, NodeIndex, StableGraph};
 use petgraph::visit::{IntoEdgeReferences, IntoNodeReferences};
 use petgraph::Directed;
 use petgraph::Direction::{Incoming, Outgoing};
 
 use crate::store::GraphStore;
-use crate::{GraphEdge, GraphNode, GraphNodeIndex, MutateGraph};
+use crate::{
+    GraphEdge, GraphNode, GraphNodeIndex, GraphQuery, GraphResponse,
+    MutatinGraphQuery, ReadOnlyGraphQuery,
+};
 
 use super::StoreError;
 
@@ -26,6 +31,105 @@ where
     store: GraphStore<N, E>,
 }
 
+impl<N, E, I> Actor for Graph<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Context = Context<Self>;
+}
+
+impl<N, E, I> Handler<GraphQuery<N, E, I>> for Graph<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = Result<GraphResponse<N, E, I>, StoreError>;
+
+    fn handle(
+        &mut self,
+        msg: GraphQuery<N, E, I>,
+        _: &mut Self::Context,
+    ) -> Self::Result {
+        match msg {
+            GraphQuery::Mutating(query) => match query {
+                MutatinGraphQuery::AddEdge((from, to, edge)) => {
+                    self.add_edge(from, to, edge)?;
+                    Ok(GraphResponse::Empty)
+                }
+                MutatinGraphQuery::RemoveEdge((from, to)) => {
+                    let edge = self.remove_edge(from, to)?;
+                    Ok(GraphResponse::Edge(edge))
+                }
+                MutatinGraphQuery::AddNode((key, node)) => {
+                    let node = self.add_node(key, node)?;
+                    Ok(GraphResponse::Node(node))
+                }
+                MutatinGraphQuery::RemoveNode(key) => {
+                    let node = self.remove_node(key)?;
+                    Ok(GraphResponse::Node(node))
+                }
+            },
+            GraphQuery::ReadOnly(query) => match query {
+                ReadOnlyGraphQuery::GetGraph => {
+                    let graph = self.get_graph()?;
+                    Ok(GraphResponse::Graph(graph))
+                }
+                ReadOnlyGraphQuery::FilterGraph((
+                    include_nodes,
+                    include_edges,
+                )) => {
+                    let graph =
+                        self.filter_graph(include_nodes, include_edges)?;
+                    Ok(GraphResponse::Graph(graph))
+                }
+                ReadOnlyGraphQuery::RetainNodes(nodes_to_retain) => {
+                    let graph = self.retain_nodes(nodes_to_retain)?;
+                    Ok(GraphResponse::Graph(graph))
+                }
+                ReadOnlyGraphQuery::GetNeighbors(key) => {
+                    let nodes = self.get_neighbors(key)?;
+                    Ok(GraphResponse::Nodes(nodes))
+                }
+                ReadOnlyGraphQuery::GetEdge((from, to)) => {
+                    let edge = self.get_edge(from, to)?;
+                    Ok(GraphResponse::Edge(edge))
+                }
+                ReadOnlyGraphQuery::GetEdges => {
+                    let edges = self.get_edges()?;
+                    Ok(GraphResponse::Edges(edges))
+                }
+                ReadOnlyGraphQuery::HasNode(key) => {
+                    let has = self.has_node(key)?;
+                    Ok(GraphResponse::Bool(has))
+                }
+                ReadOnlyGraphQuery::GetNode(key) => {
+                    let node = self.get_node(key)?;
+                    Ok(GraphResponse::Node(node))
+                }
+                ReadOnlyGraphQuery::GetNodes => {
+                    let nodes = self.get_nodes()?;
+                    Ok(GraphResponse::Nodes(nodes))
+                }
+                ReadOnlyGraphQuery::GetNodeIndex(key) => {
+                    let node_index = self.get_node_index(key)?;
+                    Ok(GraphResponse::NodeIndex(node_index))
+                }
+                ReadOnlyGraphQuery::GetSourceNodes => {
+                    let nodes = self.get_source_nodes()?;
+                    Ok(GraphResponse::Nodes(nodes))
+                }
+                ReadOnlyGraphQuery::GetSinkNodes => {
+                    let nodes = self.get_sink_nodes()?;
+                    Ok(GraphResponse::Nodes(nodes))
+                }
+            },
+        }
+    }
+}
+
 impl<N, E, I> Graph<N, E, I>
 where
     N: GraphNode,
@@ -40,6 +144,8 @@ where
         let inner = store.load_from_file()?;
         let nodes_map = Self::get_nodes_map_from_graph(&inner);
 
+        log::debug!("Initialized graph");
+
         Ok(Self {
             inner,
             nodes_map,
@@ -51,11 +157,80 @@ where
     // public interface
     //
 
-    pub fn get_graph(&self) -> Result<StableGraph<N, E, Directed>, StoreError> {
+    fn add_edge(&mut self, from: I, to: I, edge: E) -> Result<(), StoreError> {
+        let from_idx =
+            self.nodes_map.get(&from).ok_or(StoreError::NodeNotFound)?;
+        let to_idx = self.nodes_map.get(&to).ok_or(StoreError::NodeNotFound)?;
+
+        let mut graph = self.inner.clone();
+
+        graph.add_edge(*from_idx, *to_idx, edge);
+
+        self.inner = self.store.save_to_file(graph)?;
+
+        Ok(())
+    }
+
+    fn remove_edge(&mut self, from: I, to: I) -> Result<E, StoreError> {
+        if let (Some(from_idx), Some(to_idx)) =
+            (self.nodes_map.get(&from), self.nodes_map.get(&to))
+        {
+            let mut graph = self.inner.clone();
+
+            let edge_index = self
+                .inner
+                .find_edge(*from_idx, *to_idx)
+                .ok_or(StoreError::EdgeNotFound)?;
+
+            let edge = graph
+                .remove_edge(edge_index)
+                .ok_or(StoreError::EdgeNotFound)?;
+
+            self.inner = self.store.save_to_file(graph)?;
+
+            Ok(edge)
+        } else {
+            Err(StoreError::EdgeNotFound)
+        }
+    }
+
+    fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
+        if let Entry::Vacant(map_entry) = self.nodes_map.entry(key) {
+            let mut graph = self.inner.clone();
+
+            let new_node_index = graph.add_node(node.clone());
+
+            self.inner = self.store.save_to_file(graph)?;
+            map_entry.insert(new_node_index);
+
+            Ok(node)
+        } else {
+            Err(StoreError::ConflictDuplicateKey)
+        }
+    }
+
+    fn remove_node(&mut self, key: I) -> Result<N, StoreError> {
+        if let Entry::Occupied(map_entry) = self.nodes_map.entry(key) {
+            let mut graph = self.inner.clone();
+
+            let removed_node = graph
+                .remove_node(*map_entry.get())
+                .ok_or(StoreError::NodeNotDeleted)?;
+
+            self.inner = self.store.save_to_file(graph)?;
+            map_entry.remove();
+
+            Ok(removed_node)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
+    }
+
+    fn get_graph(&self) -> Result<StableGraph<N, E, Directed>, StoreError> {
         Ok(self.inner.clone())
     }
 
-    pub fn filter_graph(
+    fn filter_graph(
         &self,
         include_nodes: Option<Vec<N>>,
         include_edges: Option<Vec<E>>,
@@ -101,7 +276,7 @@ where
         Ok(filtered)
     }
 
-    pub fn retain_nodes(
+    fn retain_nodes(
         &self,
         nodes_to_retain: Vec<&I>,
     ) -> Result<StableGraph<N, E, Directed>, StoreError> {
@@ -115,7 +290,7 @@ where
         Ok(retained)
     }
 
-    pub fn get_neighbors(&self, key: &I) -> Result<Vec<N>, StoreError> {
+    fn get_neighbors(&self, key: &I) -> Result<Vec<N>, StoreError> {
         let neighbors_idxs = self.get_neighbor_indices(key)?;
 
         let neighbors = neighbors_idxs
@@ -126,19 +301,25 @@ where
         Ok(neighbors)
     }
 
-    pub fn get_edge(&self, from: &I, to: &I) -> Result<EdgeIndex, StoreError> {
+    fn get_edge(&self, from: &I, to: &I) -> Result<E, StoreError> {
         if let (Some(from_idx), Some(to_idx)) =
             (self.nodes_map.get(from), self.nodes_map.get(to))
         {
-            self.inner
+            let edge_index = self
+                .inner
                 .find_edge(*from_idx, *to_idx)
+                .ok_or(StoreError::EdgeNotFound)?;
+
+            self.inner
+                .edge_weight(edge_index)
+                .cloned()
                 .ok_or(StoreError::EdgeNotFound)
         } else {
             Err(StoreError::EdgeNotFound)
         }
     }
 
-    pub fn get_edges(&self) -> Result<Vec<E>, StoreError> {
+    fn get_edges(&self) -> Result<Vec<E>, StoreError> {
         let edge_references = self.inner.edge_references();
 
         let edges = edge_references.map(|e| e.weight()).cloned().collect();
@@ -146,11 +327,11 @@ where
         Ok(edges)
     }
 
-    pub fn has_node(&self, key: &I) -> bool {
-        self.nodes_map.contains_key(key)
+    fn has_node(&self, key: &I) -> Result<bool, StoreError> {
+        Ok(self.nodes_map.contains_key(key))
     }
 
-    pub fn get_node(&self, key: &I) -> Result<N, StoreError> {
+    fn get_node(&self, key: &I) -> Result<N, StoreError> {
         let node_index = self.get_node_index(key)?;
 
         let node = self
@@ -161,7 +342,7 @@ where
         Ok(node.clone())
     }
 
-    pub fn get_nodes(&self) -> Result<Vec<N>, StoreError> {
+    fn get_nodes(&self) -> Result<Vec<N>, StoreError> {
         let node_references = self.inner.node_references();
 
         let nodes = node_references.map(|(_, n)| n).cloned().collect();
@@ -169,21 +350,21 @@ where
         Ok(nodes)
     }
 
-    pub fn get_node_index(&self, key: &I) -> Result<NodeIndex, StoreError> {
+    fn get_node_index(&self, key: &I) -> Result<NodeIndex, StoreError> {
         let node_index =
             self.nodes_map.get(key).ok_or(StoreError::NodeNotFound)?;
 
         Ok(*node_index)
     }
 
-    pub fn get_node_indices(
+    fn get_node_indices(
         &self,
         keys: Vec<&I>,
     ) -> Result<Vec<&NodeIndex>, StoreError> {
         Ok(keys.iter().filter_map(|k| self.nodes_map.get(k)).collect())
     }
 
-    pub fn get_source_nodes(&self) -> Result<Vec<N>, StoreError> {
+    fn get_source_nodes(&self) -> Result<Vec<N>, StoreError> {
         let externals = self.inner.externals(Incoming);
         let externals = externals
             .filter_map(|n| self.inner.node_weight(n))
@@ -193,7 +374,7 @@ where
         Ok(externals)
     }
 
-    pub fn get_sink_nodes(&self) -> Result<Vec<N>, StoreError> {
+    fn get_sink_nodes(&self) -> Result<Vec<N>, StoreError> {
         let externals = self.inner.externals(Outgoing);
         let externals = externals
             .filter_map(|n| self.inner.node_weight(n))
@@ -227,78 +408,6 @@ where
             self.nodes_map.get(key).ok_or(StoreError::NodeNotFound)?;
 
         Ok(self.inner.neighbors(*found_node_index))
-    }
-}
-
-impl<N, E, I> MutateGraph<N, E, I> for Graph<N, E, I>
-where
-    N: GraphNode,
-    E: GraphEdge,
-    I: GraphNodeIndex + From<N>,
-{
-    fn add_edge(
-        &mut self,
-        from: &I,
-        to: &I,
-        edge: E,
-    ) -> Result<(), StoreError> {
-        let from_idx =
-            self.nodes_map.get(from).ok_or(StoreError::NodeNotFound)?;
-        let to_idx = self.nodes_map.get(to).ok_or(StoreError::NodeNotFound)?;
-
-        let mut graph = self.inner.clone();
-
-        graph.add_edge(*from_idx, *to_idx, edge);
-
-        self.inner = self.store.save_to_file(graph)?;
-
-        Ok(())
-    }
-
-    fn remove_edge(&mut self, from: &I, to: &I) -> Result<E, StoreError> {
-        let edge_index = self.get_edge(from, to)?;
-
-        let mut graph = self.inner.clone();
-
-        let edge = graph
-            .remove_edge(edge_index)
-            .ok_or(StoreError::EdgeNotFound)?;
-
-        self.inner = self.store.save_to_file(graph)?;
-
-        Ok(edge)
-    }
-
-    fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
-        if let Entry::Vacant(map_entry) = self.nodes_map.entry(key) {
-            let mut graph = self.inner.clone();
-
-            let new_node_index = graph.add_node(node.clone());
-
-            self.inner = self.store.save_to_file(graph)?;
-            map_entry.insert(new_node_index);
-
-            Ok(node)
-        } else {
-            Err(StoreError::ConflictDuplicateKey)
-        }
-    }
-
-    fn remove_node(&mut self, key: I) -> Result<N, StoreError> {
-        if let Entry::Occupied(map_entry) = self.nodes_map.entry(key) {
-            let mut graph = self.inner.clone();
-
-            let removed_node = graph
-                .remove_node(*map_entry.get())
-                .ok_or(StoreError::NodeNotDeleted)?;
-
-            self.inner = self.store.save_to_file(graph)?;
-            map_entry.remove();
-
-            Ok(removed_node)
-        } else {
-            Err(StoreError::NodeNotFound)
-        }
     }
 }
 
@@ -366,8 +475,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_store_from_env_ok() {
+    #[tokio::test]
+    async fn test_store_from_env_ok() {
         let test_dir = "test-data/test_store_from_env_ok";
 
         let mut graph = Graph::<
@@ -391,8 +500,8 @@ mod tests {
         std::fs::remove_dir_all(test_dir).unwrap();
     }
 
-    #[test]
-    fn test_store_add_node_duplicate_key_nok() {
+    #[tokio::test]
+    async fn test_store_add_node_duplicate_key_nok() {
         let test_dir = "test-data/test_store_add_node_duplicate_key_nok";
         let mut graph = Graph::<
             SimpleNodeType,
@@ -413,8 +522,8 @@ mod tests {
         std::fs::remove_dir_all(test_dir).unwrap();
     }
 
-    #[test]
-    fn test_store_add_node_duplicate_combined_key_nok() {
+    #[tokio::test]
+    async fn test_store_add_node_duplicate_combined_key_nok() {
         let test_dir = "test-data/duplicate_combined_key";
 
         #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -471,6 +580,7 @@ mod tests {
                 id,
             },
         );
+
         assert_eq!(result, Err(StoreError::ConflictDuplicateKey));
 
         std::fs::remove_dir_all(test_dir).unwrap();

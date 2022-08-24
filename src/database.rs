@@ -1,151 +1,303 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
-use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
+use actix::{Actor, Addr};
+use tokio::sync::oneshot;
+
+use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::Directed;
 
-use crate::client::GraphClient;
 use crate::graph::Graph;
+use crate::remotes::{Remotes, RemotesTasks};
 use crate::server::GraphServer;
-use crate::{GraphEdge, GraphNode, GraphNodeIndex, MutateGraph, StoreError};
 
+use crate::{
+    GraphEdge, GraphNode, GraphNodeIndex, GraphQuery, GraphResponse,
+    MutatinGraphQuery, ReadOnlyGraphQuery, StoreError,
+};
+
+#[derive(Debug)]
 pub struct GraphDatabase<N, E, I>
 where
-    N: GraphNode,
-    E: GraphEdge,
-    I: GraphNodeIndex + From<N>,
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    graph: Arc<RwLock<Graph<N, E, I>>>,
-    client: GraphClient<N, E, I>,
-    _server: GraphServer<N, E, I>,
+    graph: Addr<Graph<N, E, I>>,
+    remotes: Addr<Remotes>,
 }
 
 impl<N, E, I> GraphDatabase<N, E, I>
 where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
     // constructors
     //
     pub async fn run(
         store_path: Option<String>,
         server_address: SocketAddr,
-        remote_addresses: Vec<String>,
-    ) -> Result<Arc<RwLock<Self>>, StoreError> {
-        let graph = Arc::new(RwLock::new(Graph::new(store_path)?));
-        log::debug!("Initialized graph");
+        initial_remote_addresses: Vec<String>,
+        tx: oneshot::Sender<Arc<RwLock<Self>>>,
+    ) -> Result<(), StoreError> {
+        let graph_addr = Graph::<N, E, I>::new(store_path)?.start();
+        let graph_addr2 = graph_addr.clone();
 
-        let (client, _server) = tokio::join!(
-            GraphClient::new(remote_addresses),
-            GraphServer::new(Arc::clone(&graph), server_address)
-        );
+        let remotes = Remotes::new(initial_remote_addresses).await.start();
 
-        // TODO: no need to clone the whole database
-        // a handler to use the public interface would be enought
-        Ok(Arc::new(RwLock::new(Self {
-            graph,
-            client: client?,
-            _server,
+        actix_rt::spawn(async move {
+            if let Err(err) = GraphServer::run(graph_addr, server_address).await
+            {
+                log::error!(
+                    "Error while starting GraphServer. Error: '{err:?}'"
+                );
+            };
+        });
+
+        tx.send(Arc::new(RwLock::new(Self {
+            graph: graph_addr2,
+            remotes,
         })))
+        .unwrap();
+
+        Ok(())
     }
 
     //
     // public interface
     //
+    // mutating queries
+    pub async fn add_edge(
+        &mut self,
+        from: I,
+        to: I,
+        edge: E,
+    ) -> Result<(), StoreError> {
+        let query = MutatinGraphQuery::AddEdge((from, to, edge));
 
-    pub fn get_graph(&self) -> Result<StableGraph<N, E, Directed>, StoreError> {
-        self.graph.read()?.get_graph()
+        self.graph
+            .send(GraphQuery::Mutating(query.clone()))
+            .await??;
+        self.remotes.do_send(RemotesTasks::Broadcast(query));
+
+        Ok(())
     }
 
-    pub fn filter_graph(
+    pub async fn remove_edge(
+        &mut self,
+        from: I,
+        to: I,
+    ) -> Result<E, StoreError> {
+        let query = MutatinGraphQuery::RemoveEdge((from, to));
+
+        if let GraphResponse::Edge(edge) = self
+            .graph
+            .send(GraphQuery::Mutating(query.clone()))
+            .await??
+        {
+            self.remotes.do_send(RemotesTasks::Broadcast(query));
+
+            Ok(edge)
+        } else {
+            Err(StoreError::EdgeNotDeleted)
+        }
+    }
+
+    pub async fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
+        let query = MutatinGraphQuery::AddNode((key, node));
+
+        if let GraphResponse::Node(node) = self
+            .graph
+            .send(GraphQuery::Mutating(query.clone()))
+            .await??
+        {
+            self.remotes.do_send(RemotesTasks::Broadcast(query));
+
+            Ok(node)
+        } else {
+            Err(StoreError::NodeNotCreated)
+        }
+    }
+
+    pub async fn remove_node(&mut self, key: I) -> Result<N, StoreError> {
+        let query = MutatinGraphQuery::RemoveNode(key);
+
+        if let GraphResponse::Node(node) = self
+            .graph
+            .send(GraphQuery::Mutating(query.clone()))
+            .await??
+        {
+            self.remotes.do_send(RemotesTasks::Broadcast(query.clone()));
+
+            Ok(node)
+        } else {
+            Err(StoreError::NodeNotDeleted)
+        }
+    }
+
+    // read only
+    pub async fn get_graph(
+        &self,
+    ) -> Result<StableGraph<N, E, Directed>, StoreError> {
+        let query = ReadOnlyGraphQuery::GetGraph;
+
+        if let GraphResponse::Graph(graph) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(graph)
+        } else {
+            Err(StoreError::GraphNotFound)
+        }
+    }
+
+    pub async fn filter_graph(
         &self,
         include_nodes: Option<Vec<N>>,
         include_edges: Option<Vec<E>>,
     ) -> Result<StableGraph<N, E, Directed>, StoreError> {
-        self.graph
-            .read()?
-            .filter_graph(include_nodes, include_edges)
+        let query =
+            ReadOnlyGraphQuery::FilterGraph((include_nodes, include_edges));
+
+        if let GraphResponse::Graph(graph) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(graph)
+        } else {
+            Err(StoreError::GraphNotFound)
+        }
     }
 
-    pub fn retain_nodes(
+    pub async fn retain_nodes(
         &self,
-        nodes_to_retain: Vec<&I>,
+        nodes_to_retain: Vec<&'static I>,
     ) -> Result<StableGraph<N, E, Directed>, StoreError> {
-        self.graph.read()?.retain_nodes(nodes_to_retain)
+        let query = ReadOnlyGraphQuery::RetainNodes(nodes_to_retain);
+
+        if let GraphResponse::Graph(graph) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(graph)
+        } else {
+            Err(StoreError::GraphNotFound)
+        }
     }
 
-    pub fn get_neighbors(&self, key: &I) -> Result<Vec<N>, StoreError> {
-        self.graph.read()?.get_neighbors(key)
+    pub async fn get_neighbors(
+        &self,
+        key: &'static I,
+    ) -> Result<Vec<N>, StoreError> {
+        let query = ReadOnlyGraphQuery::GetNeighbors(key);
+
+        if let GraphResponse::Nodes(nodes) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(nodes)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 
-    pub fn get_edge(&self, from: &I, to: &I) -> Result<EdgeIndex, StoreError> {
-        self.graph.read()?.get_edge(from, to)
+    pub async fn get_edge(
+        &self,
+        from: &'static I,
+        to: &'static I,
+    ) -> Result<E, StoreError> {
+        let query = ReadOnlyGraphQuery::GetEdge((from, to));
+
+        if let GraphResponse::Edge(edge) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(edge)
+        } else {
+            Err(StoreError::EdgeNotFound)
+        }
     }
 
-    pub fn get_edges(&self) -> Result<Vec<E>, StoreError> {
-        self.graph.read()?.get_edges()
+    pub async fn get_edges(&self) -> Result<Vec<E>, StoreError> {
+        let query = ReadOnlyGraphQuery::GetEdges;
+
+        if let GraphResponse::Edges(edges) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(edges)
+        } else {
+            Err(StoreError::EdgeNotFound)
+        }
     }
 
-    pub fn has_node(&self, key: &I) -> Result<bool, StoreError> {
-        let graph = self.graph.read()?;
+    pub async fn has_node(&self, key: &'static I) -> Result<bool, StoreError> {
+        let query = ReadOnlyGraphQuery::HasNode(key);
 
-        Ok(graph.has_node(key))
+        if let GraphResponse::Bool(has) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(has)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 
-    pub fn get_node(&self, key: &I) -> Result<N, StoreError> {
-        self.graph.read()?.get_node(key)
+    pub async fn get_node(&self, key: &'static I) -> Result<N, StoreError> {
+        let query = ReadOnlyGraphQuery::GetNode(key);
+
+        if let GraphResponse::Node(node) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(node)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 
-    pub fn get_nodes(&self) -> Result<Vec<N>, StoreError> {
-        self.graph.read()?.get_nodes()
+    pub async fn get_nodes(&self) -> Result<Vec<N>, StoreError> {
+        let query = ReadOnlyGraphQuery::GetNodes;
+
+        if let GraphResponse::Nodes(nodes) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(nodes)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 
-    pub fn get_node_index(&self, key: &I) -> Result<NodeIndex, StoreError> {
-        self.graph.read()?.get_node_index(key)
+    pub async fn get_node_index(
+        &self,
+        key: &'static I,
+    ) -> Result<NodeIndex, StoreError> {
+        let query = ReadOnlyGraphQuery::GetNodeIndex(key);
+
+        if let GraphResponse::NodeIndex(node_index) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(node_index)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 
-    pub fn get_source_nodes(&self) -> Result<Vec<N>, StoreError> {
-        self.graph.read()?.get_source_nodes()
+    pub async fn get_source_nodes(&self) -> Result<Vec<N>, StoreError> {
+        let query = ReadOnlyGraphQuery::GetSourceNodes;
+
+        if let GraphResponse::Nodes(nodes) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(nodes)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 
-    pub fn get_sink_nodes(&self) -> Result<Vec<N>, StoreError> {
-        self.graph.read()?.get_sink_nodes()
-    }
-}
+    pub async fn get_sink_nodes(&self) -> Result<Vec<N>, StoreError> {
+        let query = ReadOnlyGraphQuery::GetSinkNodes;
 
-impl<N, E, I> MutateGraph<N, E, I> for GraphDatabase<N, E, I>
-where
-    N: GraphNode,
-    E: GraphEdge,
-    I: GraphNodeIndex + From<N>,
-{
-    fn add_edge(
-        &mut self,
-        from: &I,
-        to: &I,
-        edge: E,
-    ) -> Result<(), StoreError> {
-        let result = self.graph.write()?.add_edge(from, to, edge.clone());
-        self.client.add_edge(from, to, edge)?;
-        result
-    }
-
-    fn remove_edge(&mut self, from: &I, to: &I) -> Result<E, StoreError> {
-        let result = self.graph.write()?.remove_edge(from, to);
-        self.client.remove_edge(from, to)?;
-        result
-    }
-
-    fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
-        let result = self.graph.write()?.add_node(key.clone(), node.clone());
-        self.client.add_node(key, node)?;
-        result
-    }
-
-    fn remove_node(&mut self, key: I) -> Result<N, StoreError> {
-        let result = self.graph.write()?.remove_node(key.clone());
-        self.client.remove_node(key)?;
-        result
+        if let GraphResponse::Nodes(nodes) =
+            self.graph.send(GraphQuery::ReadOnly(query)).await??
+        {
+            Ok(nodes)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
     }
 }

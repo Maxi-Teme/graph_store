@@ -2,11 +2,17 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::PoisonError;
 
+use actix::{MailboxError, Message};
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use petgraph::stable_graph::{NodeIndex, StableGraph};
+use petgraph::Directed;
 
 mod client;
 mod database;
 mod graph;
+mod remotes;
 mod server;
 mod store;
 
@@ -38,16 +44,105 @@ pub trait GraphNodeIndex:
 {
 }
 
-pub trait MutateGraph<N: GraphNode, E: GraphEdge, I: GraphNodeIndex + From<N>> {
-    fn add_edge(&mut self, from: &I, to: &I, edge: E)
-        -> Result<(), StoreError>;
-
-    fn remove_edge(&mut self, from: &I, to: &I) -> Result<E, StoreError>;
-
-    fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError>;
-
-    fn remove_node(&mut self, key: I) -> Result<N, StoreError>;
+#[derive(Debug, Clone)]
+pub enum MutatinGraphQuery<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    AddEdge((I, I, E)),
+    RemoveEdge((I, I)),
+    AddNode((I, N)),
+    RemoveNode(I),
 }
+
+impl<N, E, I> Message for MutatinGraphQuery<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    type Result = Result<(), StoreError>;
+}
+
+#[derive(Debug, Clone)]
+pub enum ReadOnlyGraphQuery<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    GetGraph,
+    FilterGraph((Option<Vec<N>>, Option<Vec<E>>)),
+    RetainNodes(Vec<&'static I>),
+    GetNeighbors(&'static I),
+    GetEdge((&'static I, &'static I)),
+    GetEdges,
+    HasNode(&'static I),
+    GetNode(&'static I),
+    GetNodes,
+    GetNodeIndex(&'static I),
+    GetSourceNodes,
+    GetSinkNodes,
+}
+
+#[derive(Debug, Clone)]
+pub enum GraphQuery<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    Mutating(MutatinGraphQuery<N, E, I>),
+    ReadOnly(ReadOnlyGraphQuery<N, E, I>),
+}
+
+impl<N, E, I> Message for GraphQuery<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    type Result = Result<GraphResponse<N, E, I>, StoreError>;
+}
+
+pub enum GraphResponse<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    Empty,
+    Bool(bool),
+    Node(N),
+    Nodes(Vec<N>),
+    NodeIndex(NodeIndex),
+    Edge(E),
+    Edges(Vec<E>),
+    Key(I),
+    Keys(Vec<I>),
+    Graph(StableGraph<N, E, Directed>),
+}
+
+// impl<A, M, N, E, I> MessageResponse<A, M> for GraphResponse<N, E, I>
+// where
+//     A: Actor,
+//     M: Message<Result = GraphResponse<N, E, I>>,
+//     N: GraphNode + 'static,
+//     E: GraphEdge + 'static,
+//     I: GraphNodeIndex + From<N> + 'static,
+// {
+//     fn handle(
+//         self,
+//         ctx: &mut A::Context,
+//         tx: Option<OneshotSender<M::Result>>,
+//     ) {
+//         if let Some(tx) = tx {
+//             tx.send(self);
+//         }
+//     }
+// }
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
@@ -68,10 +163,18 @@ pub enum StoreError {
     PoisonError,
     StoreError,
     SyncError(String),
+    ClientError,
+    MailboxError,
 }
 
 impl<T> From<PoisonError<T>> for StoreError {
     fn from(_: PoisonError<T>) -> Self {
         Self::PoisonError
+    }
+}
+
+impl From<MailboxError> for StoreError {
+    fn from(_: MailboxError) -> Self {
+        Self::MailboxError
     }
 }

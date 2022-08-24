@@ -1,203 +1,139 @@
-use std::marker::PhantomData;
+use actix::{Actor, AsyncContext, Context, Handler, WrapFuture};
 
-use tokio::sync::broadcast::{self, Receiver, Sender};
+use futures_util::TryFutureExt;
 use tonic::transport::Channel;
 use tonic::Request;
-
-use futures_util::stream::{self, StreamExt};
 
 use crate::sync_graph::sync_graph_client::SyncGraphClient;
 use crate::sync_graph::{
     AddEdgeRequest, AddNodeRequest, RemoveEdgeRequest, RemoveNodeRequest,
 };
-use crate::{GraphEdge, GraphNode, GraphNodeIndex, StoreError};
+use crate::{
+    GraphEdge, GraphNode, GraphNodeIndex, MutatinGraphQuery, StoreError,
+};
 
 #[derive(Debug, Clone)]
-enum Requests {
-    AddEdge(AddEdgeRequest),
-    RemoveEdge(RemoveEdgeRequest),
-    AddNode(AddNodeRequest),
-    RemoveNode(RemoveNodeRequest),
-}
-
-#[derive(Debug)]
-struct Connection {
+pub struct GraphClient {
+    // addr: String,
     client: SyncGraphClient<Channel>,
-    rx: Receiver<Requests>,
 }
 
-pub struct GraphClient<N, E, I> {
-    // connections: Vec<Connection>,
-    tx: Sender<Requests>,
-    phantom_n: PhantomData<N>,
-    phantom_e: PhantomData<E>,
-    phantom_i: PhantomData<I>,
+impl Actor for GraphClient {
+    type Context = Context<Self>;
 }
 
-impl<N, E, I> GraphClient<N, E, I>
+impl GraphClient {
+    pub async fn new(address: String) -> Result<Self, StoreError> {
+        let client = SyncGraphClient::connect(address.clone())
+            .map_err(|err| {
+                log::warn!(
+                    "Could not connect initial client to '{}'. Error: '{}'",
+                    address,
+                    err
+                );
+                StoreError::ClientError
+            })
+            .await?;
+
+        Ok(Self { client })
+    }
+}
+
+impl<N, E, I> Handler<MutatinGraphQuery<N, E, I>> for GraphClient
 where
-    N: GraphNode,
-    E: GraphEdge,
-    I: GraphNodeIndex + From<N>,
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    // constructors
-    //
+    type Result = Result<(), StoreError>;
 
-    pub async fn new(
-        remote_addresses: Vec<String>,
-    ) -> Result<Self, StoreError> {
-        let (tx, _) = broadcast::channel(128);
+    fn handle(
+        &mut self,
+        msg: MutatinGraphQuery<N, E, I>,
+        ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let mut client = self.client.clone();
 
-        {
-            let mut connections = Vec::new();
-
-            for address in remote_addresses {
-                if let Ok(client) = SyncGraphClient::connect(address).await {
-                    let connection = Connection {
-                        client,
-                        rx: tx.subscribe(),
+        let future = Box::pin(async move {
+            match msg {
+                MutatinGraphQuery::AddEdge((from, to, edge)) => {
+                    let (from, to, edge) = match (
+                        bincode::serialize(&from),
+                        bincode::serialize(&to),
+                        bincode::serialize(&edge),
+                    ) {
+                        (Ok(from), Ok(to), Ok(edge)) => (from, to, edge),
+                        _ => return log::error!(
+                            "Error while serializing 'AddEdgeRequest' query."
+                        ),
                     };
-                    connections.push(connection);
+
+                    let request =
+                        Request::new(AddEdgeRequest { from, to, edge });
+                    if let Err(err) = client.add_edge(request).await {
+                        log::error!(
+                            "Error while sending 'AddEdgeRequest' request. Error: {err}"
+                        );
+                    };
+                }
+                MutatinGraphQuery::RemoveEdge((from, to)) => {
+                    let (from, to) = match (
+                        bincode::serialize(&from),
+                        bincode::serialize(&to),
+                    ) {
+                        (Ok(from), Ok(to)) => (from, to),
+                        _ => {
+                            return log::error!(
+                                "Error while serializing 'RemoveEdge' query."
+                            )
+                        }
+                    };
+
+                    let request = Request::new(RemoveEdgeRequest { from, to });
+                    if let Err(err) = client.remove_edge(request).await {
+                        log::error!("Error while sending 'RemoveEdge' request. Error: {err}");
+                    };
+                }
+                MutatinGraphQuery::AddNode((key, node)) => {
+                    let (key, node) = match (
+                        bincode::serialize(&key),
+                        bincode::serialize(&node),
+                    ) {
+                        (Ok(key), Ok(node)) => (key, node),
+                        _ => {
+                            return log::error!(
+                                "Error while serializing 'AddNode' query."
+                            )
+                        }
+                    };
+
+                    let request = Request::new(AddNodeRequest { key, node });
+                    if let Err(err) = client.add_node(request).await {
+                        log::error!(
+                            "Error while sending 'AddNode' request. Error: {err}"
+                        );
+                    };
+                }
+                MutatinGraphQuery::RemoveNode(key) => {
+                    let key = match bincode::serialize(&key) {
+                        Ok(key) => key,
+                        Err(err) => {
+                            return log::error!(
+                                "Error while serializing 'AddNode' query. Error: {err}"
+                            )
+                        },
+                    };
+
+                    let request = Request::new(RemoveNodeRequest { key });
+                    if let Err(err) = client.remove_node(request).await {
+                        log::error!("Error while sending 'remove_node' request. Error: {err}");
+                    };
                 }
             }
+        });
 
-            tokio::spawn(async move {
-                Self::handle_connections(&mut connections).await;
-            });
-
-            log::debug!("Initialized client");
-        }
-
-        Ok(Self {
-            tx,
-            phantom_n: PhantomData,
-            phantom_e: PhantomData,
-            phantom_i: PhantomData,
-        })
-    }
-
-    async fn handle_connections(connections: &mut [Connection]) {
-        loop {
-            stream::iter(connections.iter_mut())
-                .for_each_concurrent(None, Self::handle_connection)
-                .await;
-
-            log::debug!("Waiting a bit then handle next connections");
-            tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
-        }
-    }
-
-    async fn handle_connection(connection: &mut Connection) {
-        let request = match connection.rx.recv().await {
-            Ok(request) => request,
-            Err(err) => {
-                return log::error!(
-                    "Error receiving message from broadcast. Error: '{}'",
-                    err
-                )
-            }
-        };
-
-        match request {
-            Requests::AddEdge(add_edge_request) => {
-                let req = Request::new(add_edge_request);
-                if let Err(err) = connection.client.add_edge(req).await {
-                    log::error!(
-                        "Error while sending 'add_edge' request. Error: {err}"
-                    );
-                };
-            }
-            Requests::RemoveEdge(remove_edge_request) => {
-                let req = Request::new(remove_edge_request);
-                if let Err(err) = connection.client.remove_edge(req).await {
-                    log::error!("Error while sending 'remove_edge' request. Error: {err}");
-                };
-            }
-            Requests::AddNode(add_node_request) => {
-                let req = Request::new(add_node_request);
-                if let Err(err) = connection.client.add_node(req).await {
-                    log::error!(
-                        "Error while sending 'add_node' request. Error: {err}"
-                    );
-                };
-            }
-            Requests::RemoveNode(remove_node_request) => {
-                let req = Request::new(remove_node_request);
-                if let Err(err) = connection.client.remove_node(req).await {
-                    log::error!("Error while sending 'remove_node' request. Error: {err}");
-                };
-            }
-        }
-    }
-
-    pub fn add_edge(
-        &mut self,
-        from: &I,
-        to: &I,
-        edge: E,
-    ) -> Result<(), StoreError> {
-        let (from, to, edge) = match (
-            bincode::serialize(&from),
-            bincode::serialize(&to),
-            bincode::serialize(&edge),
-        ) {
-            (Ok(from), Ok(to), Ok(edge)) => (from, to, edge),
-            _ => return Err(StoreError::ParseError),
-        };
-
-        let request = Requests::AddEdge(AddEdgeRequest { from, to, edge });
-
-        if let Err(err) = self.tx.send(request) {
-            log::error!("Error while sending changes. Error: '{err}'");
-        };
-
-        Ok(())
-    }
-
-    pub fn remove_edge(&mut self, from: &I, to: &I) -> Result<(), StoreError> {
-        let (from, to) =
-            match (bincode::serialize(&from), bincode::serialize(&to)) {
-                (Ok(from), Ok(to)) => (from, to),
-                _ => return Err(StoreError::ParseError),
-            };
-
-        let request = Requests::RemoveEdge(RemoveEdgeRequest { from, to });
-
-        if let Err(err) = self.tx.send(request) {
-            log::error!("Error while sending changes. Error: '{err}'");
-        };
-
-        Ok(())
-    }
-
-    pub fn add_node(&mut self, key: I, node: N) -> Result<(), StoreError> {
-        let (key, node) =
-            match (bincode::serialize(&key), bincode::serialize(&node)) {
-                (Ok(key), Ok(node)) => (key, node),
-                _ => return Err(StoreError::ParseError),
-            };
-
-        let request = Requests::AddNode(AddNodeRequest { key, node });
-
-        if let Err(err) = self.tx.send(request) {
-            log::error!("Error while sending changes. Error: '{err}'");
-        };
-
-        Ok(())
-    }
-
-    pub fn remove_node(&mut self, key: I) -> Result<(), StoreError> {
-        let key = match bincode::serialize(&key) {
-            Ok(key) => key,
-            _ => return Err(StoreError::ParseError),
-        };
-
-        let request = Requests::RemoveNode(RemoveNodeRequest { key });
-
-        if let Err(err) = self.tx.send(request) {
-            log::error!("Error while sending changes. Error: '{err}'");
-        };
-
+        let actor_future = future.into_actor(self);
+        ctx.spawn(actor_future);
         Ok(())
     }
 }

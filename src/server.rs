@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+
+use actix::Addr;
 
 use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
@@ -11,29 +12,32 @@ use crate::sync_graph::{
     AddEdgeRequest, AddNodeRequest, ProcessResponse, RemoveEdgeRequest,
     RemoveNodeRequest, ResponseType,
 };
-use crate::{GraphEdge, GraphNode, GraphNodeIndex, MutateGraph};
+use crate::{
+    GraphEdge, GraphNode, GraphNodeIndex, GraphQuery, MutatinGraphQuery,
+    StoreError,
+};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GraphServer<N, E, I>
 where
-    N: GraphNode,
-    E: GraphEdge,
-    I: GraphNodeIndex + From<N>,
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    graph: Arc<RwLock<Graph<N, E, I>>>,
+    graph_addr: Addr<Graph<N, E, I>>,
 }
 
 impl<N, E, I> GraphServer<N, E, I>
 where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    pub async fn new(
-        graph: Arc<RwLock<Graph<N, E, I>>>,
+    pub async fn run(
+        graph_addr: Addr<Graph<N, E, I>>,
         server_address: SocketAddr,
-    ) -> Self {
-        let sync_graph_server = Self::default();
+    ) -> Result<(), StoreError> {
+        let sync_graph_server = Self { graph_addr };
 
         tokio::spawn(async move {
             match Server::builder()
@@ -48,16 +52,16 @@ where
             }
         });
 
-        Self { graph }
+        Ok(())
     }
 }
 
 #[tonic::async_trait]
 impl<N, E, I> SyncGraph for GraphServer<N, E, I>
 where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
+    N: GraphNode + Unpin,
+    E: GraphEdge + Unpin,
+    I: GraphNodeIndex + From<N> + Unpin,
 {
     async fn add_edge(
         &self,
@@ -74,11 +78,16 @@ where
             _ => return Err(Status::new(Code::Internal, "")),
         };
 
-        if let Ok(mut graph) = self.graph.write() {
-            if let Err(err) = graph.add_edge(&from, &to, edge) {
-                return Err(Status::new(Code::Internal, &format!("{err:?}")));
-            }
-        }
+        log::debug!(
+            "Got add_edge request. from: '{:?}' to: '{:?}' edge: '{:?}'",
+            from,
+            to,
+            edge
+        );
+
+        let query = MutatinGraphQuery::AddEdge((from, to, edge));
+
+        self.graph_addr.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -97,11 +106,8 @@ where
                 _ => return Err(Status::new(Code::Internal, "")),
             };
 
-        if let Ok(mut graph) = self.graph.write() {
-            if let Err(err) = graph.remove_edge(&from, &to) {
-                return Err(Status::new(Code::Internal, &format!("{err:?}")));
-            }
-        }
+        let query = MutatinGraphQuery::RemoveEdge((from, to));
+        self.graph_addr.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -120,11 +126,8 @@ where
                 _ => return Err(Status::new(Code::Internal, "")),
             };
 
-        if let Ok(mut graph) = self.graph.write() {
-            if let Err(err) = graph.add_node(key, node) {
-                return Err(Status::new(Code::Internal, &format!("{err:?}")));
-            }
-        }
+        let query = MutatinGraphQuery::AddNode((key, node));
+        self.graph_addr.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -144,11 +147,8 @@ where
             }
         };
 
-        if let Ok(mut graph) = self.graph.write() {
-            if let Err(err) = graph.remove_node(key) {
-                return Err(Status::new(Code::Internal, &format!("{err:?}")));
-            };
-        }
+        let query = MutatinGraphQuery::RemoveNode(key);
+        self.graph_addr.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
