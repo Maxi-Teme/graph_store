@@ -2,6 +2,7 @@ syntax = "proto3";
 package sync_graph;
 
 service SyncGraph {
+  rpc AddRemote (AddRemoteRequest) returns (ProcessResponse);
   rpc AddEdge (AddEdgeRequest) returns (ProcessResponse);
   rpc RemoveEdge (RemoveEdgeRequest) returns (ProcessResponse);
   rpc AddNode (AddNodeRequest) returns (ProcessResponse);
@@ -16,6 +17,10 @@ enum ResponseType {
 
 message ProcessResponse {
   ResponseType response_type = 1;
+}
+
+message AddRemoteRequest {
+  string address = 1;
 }
 
 message AddEdgeRequest {

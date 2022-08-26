@@ -1,15 +1,17 @@
 use actix::{Actor, AsyncContext, Context, Handler, WrapFuture};
 
 use futures_util::TryFutureExt;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 
 use crate::sync_graph::sync_graph_client::SyncGraphClient;
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, RemoveEdgeRequest, RemoveNodeRequest,
+    AddEdgeRequest, AddNodeRequest, AddRemoteRequest, RemoveEdgeRequest,
+    RemoveNodeRequest,
 };
 use crate::{
-    GraphEdge, GraphNode, GraphNodeIndex, MutatinGraphQuery, StoreError,
+    GraphEdge, GraphNode, GraphNodeIndex, MutatinGraphQuery, RemotesMessage,
+    StoreError,
 };
 
 #[derive(Debug, Clone)]
@@ -23,19 +25,49 @@ impl Actor for GraphClient {
 }
 
 impl GraphClient {
-    pub async fn new(address: String) -> Result<Self, StoreError> {
-        let client = SyncGraphClient::connect(address.clone())
+    pub async fn new(endpoint: Endpoint) -> Result<Self, StoreError> {
+        let client = SyncGraphClient::connect(endpoint)
             .map_err(|err| {
-                log::warn!(
-                    "Could not connect initial client to '{}'. Error: '{}'",
-                    address,
-                    err
-                );
+                log::warn!("Could not connect client. Error: '{err}'");
                 StoreError::ClientError
             })
             .await?;
 
         Ok(Self { client })
+    }
+}
+
+impl Handler<RemotesMessage> for GraphClient {
+    type Result = Result<(), StoreError>;
+
+    fn handle(
+        &mut self,
+        msg: RemotesMessage,
+        ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let endpoint: Result<Endpoint, _> = msg.0.try_into();
+
+        if let Ok(endpoint) = endpoint {
+            let request = Request::new(AddRemoteRequest {
+                address: endpoint.uri().to_string(),
+            });
+
+            let mut client = self.client.clone();
+
+            let future = Box::pin(async move {
+                if let Err(err) = client.add_remote(request).await {
+                    log::error!(
+                        "Error sending add_remote request. Error: '{err}'"
+                    );
+                }
+            });
+
+            let actor_future = future.into_actor(self);
+            ctx.spawn(actor_future);
+            Ok(())
+        } else {
+            Err(StoreError::ParseError)
+        }
     }
 }
 
@@ -63,9 +95,11 @@ where
                         bincode::serialize(&edge),
                     ) {
                         (Ok(from), Ok(to), Ok(edge)) => (from, to, edge),
-                        _ => return log::error!(
+                        _ => {
+                            return log::error!(
                             "Error while serializing 'AddEdgeRequest' query."
-                        ),
+                        )
+                        }
                     };
 
                     let request =

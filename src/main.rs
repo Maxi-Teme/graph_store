@@ -1,9 +1,4 @@
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::RwLock;
-use std::{env, sync::Arc};
-
-use tokio::sync::oneshot;
+use std::env;
 
 use serde::{Deserialize, Serialize};
 
@@ -49,35 +44,37 @@ async fn main() -> Result<(), std::io::Error> {
     env_logger::init();
 
     let store_path: String =
-        env::var("DATA_STORE_PATH").expect("DATA_STORE_PATH");
+        env::var("AGRAPHSTORE_PATH").expect("AGRAPHSTORE_PATH");
 
-    let server_address = env::var("DATABASE_SERVER_URL").expect("DATABASE_URL");
-    let server_address = SocketAddr::from_str(&server_address)
-        .expect("provided DATABASE_URL was not valid");
+    let server_address =
+        env::var("AGRAPHSTORE_SERVER_URL").expect("AGRAPHSTORE_SERVER_URL");
 
     let initial_remote_addresses: Vec<String> =
-        env::var("DATABASE_INITIAL_REMOTE_ADDRESSES")
-            .expect("DATABASE_INITIAL_REMOTE_ADDRESSES")
+        env::var("AGRAPHSTORE_INITIAL_REMOTE_URLS")
+            .expect("AGRAPHSTORE_INITIAL_REMOTE_URLS")
             .split(',')
             .map(String::from)
             .collect();
 
-    let (tx, rx) = oneshot::channel::<Arc<RwLock<Database>>>();
+    log::info!(
+        "AGRAPHSTORE_PATH: {:?}, AGRAPHSTORE_SERVER_URL: {:?}, \
+AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
+        store_path,
+        server_address,
+        initial_remote_addresses
+    );
 
-    // tokio::spawn(async move {
-    Database::run(
+    let database = Database::run(
         Some(store_path),
         server_address,
         initial_remote_addresses,
-        tx,
     )
     .await
+    .unwrap()
+    .recv()
     .unwrap();
-    // });
 
-    let database = rx.await.unwrap();
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     {
         if env::var("MAIN").is_ok() {
@@ -110,11 +107,43 @@ async fn main() -> Result<(), std::io::Error> {
     }
 
     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    log::info!("UPDATING GRAPH SECOND TIME");
+    {
+        if env::var("MAIN").is_ok() {
+            database
+                .write()
+                .unwrap()
+                .add_node(
+                    NodeKey(3),
+                    NodeTypes {
+                        id: 3,
+                        name: "Third Node".to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        } else {
+            database
+                .write()
+                .unwrap()
+                .add_node(
+                    NodeKey(4),
+                    NodeTypes {
+                        id: 4,
+                        name: "Fourth Node".to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     let graph = database.read().unwrap().get_graph().await.unwrap();
-    log::debug!("Resulting Graph: '{:?}'", graph);
+    log::info!("Resulting Graph: '{:?}'", graph);
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(60 * 5)).await;
 
     Ok(())
 }

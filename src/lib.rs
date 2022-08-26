@@ -125,24 +125,11 @@ where
     Graph(StableGraph<N, E, Directed>),
 }
 
-// impl<A, M, N, E, I> MessageResponse<A, M> for GraphResponse<N, E, I>
-// where
-//     A: Actor,
-//     M: Message<Result = GraphResponse<N, E, I>>,
-//     N: GraphNode + 'static,
-//     E: GraphEdge + 'static,
-//     I: GraphNodeIndex + From<N> + 'static,
-// {
-//     fn handle(
-//         self,
-//         ctx: &mut A::Context,
-//         tx: Option<OneshotSender<M::Result>>,
-//     ) {
-//         if let Some(tx) = tx {
-//             tx.send(self);
-//         }
-//     }
-// }
+pub struct RemotesMessage(String);
+
+impl Message for RemotesMessage {
+    type Result = Result<(), StoreError>;
+}
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
@@ -163,6 +150,7 @@ pub enum StoreError {
     PoisonError,
     StoreError,
     SyncError(String),
+    ClientSendError,
     ClientError,
     MailboxError,
 }

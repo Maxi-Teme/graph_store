@@ -7,14 +7,15 @@ use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
 
 use crate::graph::Graph;
+use crate::remotes::Remotes;
 use crate::sync_graph::sync_graph_server::{SyncGraph, SyncGraphServer};
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, ProcessResponse, RemoveEdgeRequest,
-    RemoveNodeRequest, ResponseType,
+    AddEdgeRequest, AddNodeRequest, AddRemoteRequest, ProcessResponse,
+    RemoveEdgeRequest, RemoveNodeRequest, ResponseType,
 };
 use crate::{
     GraphEdge, GraphNode, GraphNodeIndex, GraphQuery, MutatinGraphQuery,
-    StoreError,
+    RemotesMessage, StoreError,
 };
 
 #[derive(Debug)]
@@ -24,7 +25,8 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    graph_addr: Addr<Graph<N, E, I>>,
+    graph: Addr<Graph<N, E, I>>,
+    remotes: Addr<Remotes>,
 }
 
 impl<N, E, I> GraphServer<N, E, I>
@@ -34,18 +36,20 @@ where
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
     pub async fn run(
-        graph_addr: Addr<Graph<N, E, I>>,
         server_address: SocketAddr,
+        graph: Addr<Graph<N, E, I>>,
+        remotes: Addr<Remotes>,
     ) -> Result<(), StoreError> {
-        let sync_graph_server = Self { graph_addr };
+        let sync_graph_server = Self { graph, remotes };
+        let service = SyncGraphServer::new(sync_graph_server);
 
         tokio::spawn(async move {
             match Server::builder()
-                .add_service(SyncGraphServer::new(sync_graph_server))
+                .add_service(service)
                 .serve(server_address)
                 .await
             {
-                Ok(()) => log::debug!("Initialized server"),
+                Ok(()) => log::info!("Initialized server"),
                 Err(err) => {
                     panic!("Error while starting gRPC server. Error: '{err}'")
                 }
@@ -63,6 +67,29 @@ where
     E: GraphEdge + Unpin,
     I: GraphNodeIndex + From<N> + Unpin,
 {
+    async fn add_remote(
+        &self,
+        request: Request<AddRemoteRequest>,
+    ) -> Result<Response<ProcessResponse>, Status> {
+        let AddRemoteRequest { address } = request.into_inner();
+
+        log::info!("Got new remote client message. New address {}", address);
+
+        if let Err(err) =
+            self.remotes.send(RemotesMessage(address.clone())).await
+        {
+            let msg = format!(
+                "RemotesTasks::AddRemote({}) failed. Error: '{}'",
+                address, err
+            );
+            return Err(Status::internal(msg));
+        };
+
+        Ok(Response::new(ProcessResponse {
+            response_type: ResponseType::Ok.into(),
+        }))
+    }
+
     async fn add_edge(
         &self,
         request: Request<AddEdgeRequest>,
@@ -78,7 +105,7 @@ where
             _ => return Err(Status::new(Code::Internal, "")),
         };
 
-        log::debug!(
+        log::info!(
             "Got add_edge request. from: '{:?}' to: '{:?}' edge: '{:?}'",
             from,
             to,
@@ -87,7 +114,7 @@ where
 
         let query = MutatinGraphQuery::AddEdge((from, to, edge));
 
-        self.graph_addr.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -107,7 +134,7 @@ where
             };
 
         let query = MutatinGraphQuery::RemoveEdge((from, to));
-        self.graph_addr.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -127,7 +154,7 @@ where
             };
 
         let query = MutatinGraphQuery::AddNode((key, node));
-        self.graph_addr.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -148,7 +175,7 @@ where
         };
 
         let query = MutatinGraphQuery::RemoveNode(key);
-        self.graph_addr.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphQuery::Mutating(query));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),

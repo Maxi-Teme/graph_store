@@ -1,7 +1,4 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -73,14 +70,16 @@ pub async fn setup(
     store_path: &'static str,
     port: u16,
 ) -> (Arc<RwLock<SimpleDatabase>>, impl Fn() -> ()) {
-    let server_address =
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+    let server_address = format!("http://127.0.0.1:{}", port);
+
     let database = GraphDatabase::run(
         Some(store_path.to_string()),
         server_address,
         vec![],
     )
     .await
+    .unwrap()
+    .recv()
     .unwrap();
 
     let teardown = move || {

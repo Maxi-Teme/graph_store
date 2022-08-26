@@ -144,7 +144,7 @@ where
         let inner = store.load_from_file()?;
         let nodes_map = Self::get_nodes_map_from_graph(&inner);
 
-        log::debug!("Initialized graph");
+        log::info!("Initialized graph");
 
         Ok(Self {
             inner,
@@ -240,14 +240,14 @@ where
                 let mut nodes = nodes.into_iter();
                 let node_filter = |_, node: &N| {
                     nodes.find(|n| {
-                        log::debug!("n: {:#?} == node: {:#?}", n, node);
+                        log::info!("n: {:?} == node: {:?}", n, node);
                         n == node
                     })
                 };
                 let mut edges = edges.into_iter();
                 let edge_filter = |_, edge: &E| {
                     edges.find(|e| {
-                        log::debug!("e: {:#?} == edge: {:#?}", e, edge);
+                        log::info!("e: {:?} == edge: {:?}", e, edge);
                         e == edge
                     })
                 };
@@ -259,7 +259,7 @@ where
                 let node_filter = |_, node: &N| nodes.find(|n| n == node);
                 let edge_filter = |_, edge: &E| Some((*edge).clone());
 
-                log::debug!("(Some(nodes), None)");
+                log::info!("(Some(nodes), None)");
 
                 self.inner.filter_map(node_filter, edge_filter)
             }

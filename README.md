@@ -1,3 +1,14 @@
-RUST_LOG=debug DATA_STORE_PATH='test-data/main' DATABASE_SERVER_URL='127.0.0.1:50000' DATABASE_INITIAL_REMOTE_ADDRESSES='' MAIN=true cargo run
+rm -f test-data/main/data.bin && \
+  RUST_LOG=info \
+  AGRAPHSTORE_PATH='test-data/main' \
+  AGRAPHSTORE_SERVER_URL='http://127.0.0.1:50000' \
+  AGRAPHSTORE_INITIAL_REMOTE_URLS='' \
+  MAIN=true \
+  cargo run
 
-RUST_LOG=debug DATA_STORE_PATH='test-data/remote' DATABASE_SERVER_URL='127.0.0.1:50001' DATABASE_INITIAL_REMOTE_ADDRESSES='http://127.0.0.1:50000' cargo run
+rm -f test-data/remote/data.bin && \
+  RUST_LOG=info \
+  AGRAPHSTORE_PATH='test-data/remote' \
+  AGRAPHSTORE_SERVER_URL='http://127.0.0.1:50001' \
+  AGRAPHSTORE_INITIAL_REMOTE_URLS='http://127.0.0.1:50000' \
+  cargo run

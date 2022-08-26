@@ -1,14 +1,16 @@
 use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::{Arc, RwLock};
 
 use actix::{Actor, Addr};
-use tokio::sync::oneshot;
 
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::Directed;
+use url::Url;
 
 use crate::graph::Graph;
-use crate::remotes::{Remotes, RemotesTasks};
+use crate::remotes::Remotes;
 use crate::server::GraphServer;
 
 use crate::{
@@ -37,17 +39,46 @@ where
     //
     pub async fn run(
         store_path: Option<String>,
-        server_address: SocketAddr,
+        server_url: String,
         initial_remote_addresses: Vec<String>,
-        tx: oneshot::Sender<Arc<RwLock<Self>>>,
-    ) -> Result<(), StoreError> {
-        let graph_addr = Graph::<N, E, I>::new(store_path)?.start();
-        let graph_addr2 = graph_addr.clone();
+    ) -> Result<Receiver<Arc<RwLock<Self>>>, StoreError> {
+        let graph = Graph::<N, E, I>::new(store_path)?.start();
+        let graph2 = graph.clone();
 
-        let remotes = Remotes::new(initial_remote_addresses).await.start();
+        let remotes =
+            Remotes::new(server_url.clone(), initial_remote_addresses)
+                .await
+                .start();
+        let remotes2 = remotes.clone();
+
+        let server_address = match Url::parse(&server_url) {
+            Ok(url) => match (url.host_str(), url.port()) {
+                (Some(host), Some(port)) => format!("{}:{}", host, port),
+                _ => return Err(StoreError::ParseError),
+            },
+            Err(err) => {
+                log::error!(
+                    "Error while parsing server url. \
+Error: '{err}'"
+                );
+                return Err(StoreError::ParseError);
+            }
+        };
+
+        let server_address = match SocketAddr::from_str(&server_address) {
+            Ok(address) => address,
+            Err(err) => {
+                log::error!(
+                    "Error while formatting server url to socket address. \
+Error: '{err}'"
+                );
+                return Err(StoreError::ParseError);
+            }
+        };
 
         actix_rt::spawn(async move {
-            if let Err(err) = GraphServer::run(graph_addr, server_address).await
+            if let Err(err) =
+                GraphServer::run(server_address, graph2, remotes2).await
             {
                 log::error!(
                     "Error while starting GraphServer. Error: '{err:?}'"
@@ -55,13 +86,12 @@ where
             };
         });
 
-        tx.send(Arc::new(RwLock::new(Self {
-            graph: graph_addr2,
-            remotes,
-        })))
-        .unwrap();
+        let (tx, rx) = sync_channel::<Arc<RwLock<Self>>>(1);
 
-        Ok(())
+        tx.send(Arc::new(RwLock::new(Self { graph, remotes })))
+            .unwrap();
+
+        Ok(rx)
     }
 
     //
@@ -79,7 +109,7 @@ where
         self.graph
             .send(GraphQuery::Mutating(query.clone()))
             .await??;
-        self.remotes.do_send(RemotesTasks::Broadcast(query));
+        self.remotes.do_send(query);
 
         Ok(())
     }
@@ -96,7 +126,7 @@ where
             .send(GraphQuery::Mutating(query.clone()))
             .await??
         {
-            self.remotes.do_send(RemotesTasks::Broadcast(query));
+            self.remotes.do_send(query);
 
             Ok(edge)
         } else {
@@ -112,7 +142,7 @@ where
             .send(GraphQuery::Mutating(query.clone()))
             .await??
         {
-            self.remotes.do_send(RemotesTasks::Broadcast(query));
+            self.remotes.do_send(query);
 
             Ok(node)
         } else {
@@ -128,7 +158,7 @@ where
             .send(GraphQuery::Mutating(query.clone()))
             .await??
         {
-            self.remotes.do_send(RemotesTasks::Broadcast(query.clone()));
+            self.remotes.do_send(query);
 
             Ok(node)
         } else {
