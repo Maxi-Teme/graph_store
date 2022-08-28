@@ -45,7 +45,7 @@ pub trait GraphNodeIndex:
 }
 
 #[derive(Debug, Clone)]
-pub enum MutatinGraphQuery<N, E, I>
+pub enum GraphMutation<N, E, I>
 where
     N: GraphNode + 'static,
     E: GraphEdge + 'static,
@@ -57,17 +57,17 @@ where
     RemoveNode(I),
 }
 
-impl<N, E, I> Message for MutatinGraphQuery<N, E, I>
+impl<N, E, I> Message for GraphMutation<N, E, I>
 where
     N: GraphNode + 'static,
     E: GraphEdge + 'static,
     I: GraphNodeIndex + From<N> + 'static,
 {
-    type Result = Result<(), StoreError>;
+    type Result = Result<GraphResponse<N, E, I>, StoreError>;
 }
 
 #[derive(Debug, Clone)]
-pub enum ReadOnlyGraphQuery<N, E, I>
+pub enum GraphQuery<N, E, I>
 where
     N: GraphNode + 'static,
     E: GraphEdge + 'static,
@@ -85,17 +85,6 @@ where
     GetNodeIndex(&'static I),
     GetSourceNodes,
     GetSinkNodes,
-}
-
-#[derive(Debug, Clone)]
-pub enum GraphQuery<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    Mutating(MutatinGraphQuery<N, E, I>),
-    ReadOnly(ReadOnlyGraphQuery<N, E, I>),
 }
 
 impl<N, E, I> Message for GraphQuery<N, E, I>

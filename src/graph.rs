@@ -11,8 +11,8 @@ use petgraph::Direction::{Incoming, Outgoing};
 
 use crate::store::GraphStore;
 use crate::{
-    GraphEdge, GraphNode, GraphNodeIndex, GraphQuery, GraphResponse,
-    MutatinGraphQuery, ReadOnlyGraphQuery,
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphQuery,
+    GraphResponse,
 };
 
 use super::StoreError;
@@ -40,6 +40,40 @@ where
     type Context = Context<Self>;
 }
 
+impl<N, E, I> Handler<GraphMutation<N, E, I>> for Graph<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = Result<GraphResponse<N, E, I>, StoreError>;
+
+    fn handle(
+        &mut self,
+        msg: GraphMutation<N, E, I>,
+        _: &mut Self::Context,
+    ) -> Self::Result {
+        match msg {
+            GraphMutation::AddEdge((from, to, edge)) => {
+                self.add_edge(from, to, edge)?;
+                Ok(GraphResponse::Empty)
+            }
+            GraphMutation::RemoveEdge((from, to)) => {
+                let edge = self.remove_edge(from, to)?;
+                Ok(GraphResponse::Edge(edge))
+            }
+            GraphMutation::AddNode((key, node)) => {
+                let node = self.add_node(key, node)?;
+                Ok(GraphResponse::Node(node))
+            }
+            GraphMutation::RemoveNode(key) => {
+                let node = self.remove_node(key)?;
+                Ok(GraphResponse::Node(node))
+            }
+        }
+    }
+}
+
 impl<N, E, I> Handler<GraphQuery<N, E, I>> for Graph<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
@@ -54,78 +88,54 @@ where
         _: &mut Self::Context,
     ) -> Self::Result {
         match msg {
-            GraphQuery::Mutating(query) => match query {
-                MutatinGraphQuery::AddEdge((from, to, edge)) => {
-                    self.add_edge(from, to, edge)?;
-                    Ok(GraphResponse::Empty)
-                }
-                MutatinGraphQuery::RemoveEdge((from, to)) => {
-                    let edge = self.remove_edge(from, to)?;
-                    Ok(GraphResponse::Edge(edge))
-                }
-                MutatinGraphQuery::AddNode((key, node)) => {
-                    let node = self.add_node(key, node)?;
-                    Ok(GraphResponse::Node(node))
-                }
-                MutatinGraphQuery::RemoveNode(key) => {
-                    let node = self.remove_node(key)?;
-                    Ok(GraphResponse::Node(node))
-                }
-            },
-            GraphQuery::ReadOnly(query) => match query {
-                ReadOnlyGraphQuery::GetGraph => {
-                    let graph = self.get_graph()?;
-                    Ok(GraphResponse::Graph(graph))
-                }
-                ReadOnlyGraphQuery::FilterGraph((
-                    include_nodes,
-                    include_edges,
-                )) => {
-                    let graph =
-                        self.filter_graph(include_nodes, include_edges)?;
-                    Ok(GraphResponse::Graph(graph))
-                }
-                ReadOnlyGraphQuery::RetainNodes(nodes_to_retain) => {
-                    let graph = self.retain_nodes(nodes_to_retain)?;
-                    Ok(GraphResponse::Graph(graph))
-                }
-                ReadOnlyGraphQuery::GetNeighbors(key) => {
-                    let nodes = self.get_neighbors(key)?;
-                    Ok(GraphResponse::Nodes(nodes))
-                }
-                ReadOnlyGraphQuery::GetEdge((from, to)) => {
-                    let edge = self.get_edge(from, to)?;
-                    Ok(GraphResponse::Edge(edge))
-                }
-                ReadOnlyGraphQuery::GetEdges => {
-                    let edges = self.get_edges()?;
-                    Ok(GraphResponse::Edges(edges))
-                }
-                ReadOnlyGraphQuery::HasNode(key) => {
-                    let has = self.has_node(key)?;
-                    Ok(GraphResponse::Bool(has))
-                }
-                ReadOnlyGraphQuery::GetNode(key) => {
-                    let node = self.get_node(key)?;
-                    Ok(GraphResponse::Node(node))
-                }
-                ReadOnlyGraphQuery::GetNodes => {
-                    let nodes = self.get_nodes()?;
-                    Ok(GraphResponse::Nodes(nodes))
-                }
-                ReadOnlyGraphQuery::GetNodeIndex(key) => {
-                    let node_index = self.get_node_index(key)?;
-                    Ok(GraphResponse::NodeIndex(node_index))
-                }
-                ReadOnlyGraphQuery::GetSourceNodes => {
-                    let nodes = self.get_source_nodes()?;
-                    Ok(GraphResponse::Nodes(nodes))
-                }
-                ReadOnlyGraphQuery::GetSinkNodes => {
-                    let nodes = self.get_sink_nodes()?;
-                    Ok(GraphResponse::Nodes(nodes))
-                }
-            },
+            GraphQuery::GetGraph => {
+                let graph = self.get_graph()?;
+                Ok(GraphResponse::Graph(graph))
+            }
+            GraphQuery::FilterGraph((include_nodes, include_edges)) => {
+                let graph = self.filter_graph(include_nodes, include_edges)?;
+                Ok(GraphResponse::Graph(graph))
+            }
+            GraphQuery::RetainNodes(nodes_to_retain) => {
+                let graph = self.retain_nodes(nodes_to_retain)?;
+                Ok(GraphResponse::Graph(graph))
+            }
+            GraphQuery::GetNeighbors(key) => {
+                let nodes = self.get_neighbors(key)?;
+                Ok(GraphResponse::Nodes(nodes))
+            }
+            GraphQuery::GetEdge((from, to)) => {
+                let edge = self.get_edge(from, to)?;
+                Ok(GraphResponse::Edge(edge))
+            }
+            GraphQuery::GetEdges => {
+                let edges = self.get_edges()?;
+                Ok(GraphResponse::Edges(edges))
+            }
+            GraphQuery::HasNode(key) => {
+                let has = self.has_node(key)?;
+                Ok(GraphResponse::Bool(has))
+            }
+            GraphQuery::GetNode(key) => {
+                let node = self.get_node(key)?;
+                Ok(GraphResponse::Node(node))
+            }
+            GraphQuery::GetNodes => {
+                let nodes = self.get_nodes()?;
+                Ok(GraphResponse::Nodes(nodes))
+            }
+            GraphQuery::GetNodeIndex(key) => {
+                let node_index = self.get_node_index(key)?;
+                Ok(GraphResponse::NodeIndex(node_index))
+            }
+            GraphQuery::GetSourceNodes => {
+                let nodes = self.get_source_nodes()?;
+                Ok(GraphResponse::Nodes(nodes))
+            }
+            GraphQuery::GetSinkNodes => {
+                let nodes = self.get_sink_nodes()?;
+                Ok(GraphResponse::Nodes(nodes))
+            }
         }
     }
 }

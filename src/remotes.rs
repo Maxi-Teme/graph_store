@@ -6,7 +6,7 @@ use tonic::transport::Endpoint;
 
 use crate::{
     client::GraphClient, GraphEdge, GraphNode, GraphNodeIndex,
-    MutatinGraphQuery, RemotesMessage, StoreError,
+    GraphMutation, RemotesMessage, StoreError, GraphResponse,
 };
 
 pub struct Remotes {
@@ -103,43 +103,43 @@ message to Endpoint. Error: '{err}'",
     }
 }
 
-impl<N, E, I> Handler<MutatinGraphQuery<N, E, I>> for Remotes
+impl<N, E, I> Handler<GraphMutation<N, E, I>> for Remotes
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<(), StoreError>;
+    type Result = Result<GraphResponse<N, E, I>, StoreError>;
 
     fn handle(
         &mut self,
-        msg: MutatinGraphQuery<N, E, I>,
+        msg: GraphMutation<N, E, I>,
         _: &mut Self::Context,
     ) -> Self::Result {
         match msg {
-            MutatinGraphQuery::AddEdge(query) => {
-                let msg = MutatinGraphQuery::AddEdge(query);
+            GraphMutation::AddEdge(query) => {
+                let msg = GraphMutation::AddEdge(query);
 
                 for address in self.remote_addresses.iter() {
                     address.do_send(msg.clone())
                 }
             }
-            MutatinGraphQuery::RemoveEdge(query) => {
-                let msg = MutatinGraphQuery::<N, E, I>::RemoveEdge(query);
+            GraphMutation::RemoveEdge(query) => {
+                let msg = GraphMutation::<N, E, I>::RemoveEdge(query);
 
                 for address in self.remote_addresses.iter() {
                     address.do_send(msg.clone())
                 }
             }
-            MutatinGraphQuery::AddNode(query) => {
-                let msg = MutatinGraphQuery::<N, E, I>::AddNode(query);
+            GraphMutation::AddNode(query) => {
+                let msg = GraphMutation::<N, E, I>::AddNode(query);
 
                 for address in self.remote_addresses.iter() {
                     address.do_send(msg.clone())
                 }
             }
-            MutatinGraphQuery::RemoveNode(query) => {
-                let msg = MutatinGraphQuery::<N, E, I>::RemoveNode(query);
+            GraphMutation::RemoveNode(query) => {
+                let msg = GraphMutation::<N, E, I>::RemoveNode(query);
 
                 for address in self.remote_addresses.iter() {
                     address.do_send(msg.clone())
@@ -147,6 +147,6 @@ where
             }
         };
 
-        Ok(())
+        Ok(GraphResponse::Empty)
     }
 }

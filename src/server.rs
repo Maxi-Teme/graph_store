@@ -14,8 +14,8 @@ use crate::sync_graph::{
     RemoveEdgeRequest, RemoveNodeRequest, ResponseType,
 };
 use crate::{
-    GraphEdge, GraphNode, GraphNodeIndex, GraphQuery, MutatinGraphQuery,
-    RemotesMessage, StoreError,
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, RemotesMessage,
+    StoreError,
 };
 
 #[derive(Debug)]
@@ -112,9 +112,7 @@ where
             edge
         );
 
-        let query = MutatinGraphQuery::AddEdge((from, to, edge));
-
-        self.graph.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphMutation::AddEdge((from, to, edge)));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -133,8 +131,7 @@ where
                 _ => return Err(Status::new(Code::Internal, "")),
             };
 
-        let query = MutatinGraphQuery::RemoveEdge((from, to));
-        self.graph.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphMutation::RemoveEdge((from, to)));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -153,8 +150,7 @@ where
                 _ => return Err(Status::new(Code::Internal, "")),
             };
 
-        let query = MutatinGraphQuery::AddNode((key, node));
-        self.graph.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphMutation::AddNode((key, node)));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),
@@ -174,8 +170,7 @@ where
             }
         };
 
-        let query = MutatinGraphQuery::RemoveNode(key);
-        self.graph.do_send(GraphQuery::Mutating(query));
+        self.graph.do_send(GraphMutation::RemoveNode(key));
 
         Ok(Response::new(ProcessResponse {
             response_type: ResponseType::Ok.into(),

@@ -10,8 +10,8 @@ use crate::sync_graph::{
     RemoveNodeRequest,
 };
 use crate::{
-    GraphEdge, GraphNode, GraphNodeIndex, MutatinGraphQuery, RemotesMessage,
-    StoreError,
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphResponse,
+    RemotesMessage, StoreError,
 };
 
 #[derive(Debug, Clone)]
@@ -71,24 +71,24 @@ impl Handler<RemotesMessage> for GraphClient {
     }
 }
 
-impl<N, E, I> Handler<MutatinGraphQuery<N, E, I>> for GraphClient
+impl<N, E, I> Handler<GraphMutation<N, E, I>> for GraphClient
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<(), StoreError>;
+    type Result = Result<GraphResponse<N, E, I>, StoreError>;
 
     fn handle(
         &mut self,
-        msg: MutatinGraphQuery<N, E, I>,
+        msg: GraphMutation<N, E, I>,
         ctx: &mut Self::Context,
     ) -> Self::Result {
         let mut client = self.client.clone();
 
         let future = Box::pin(async move {
             match msg {
-                MutatinGraphQuery::AddEdge((from, to, edge)) => {
+                GraphMutation::AddEdge((from, to, edge)) => {
                     let (from, to, edge) = match (
                         bincode::serialize(&from),
                         bincode::serialize(&to),
@@ -110,7 +110,7 @@ where
                         );
                     };
                 }
-                MutatinGraphQuery::RemoveEdge((from, to)) => {
+                GraphMutation::RemoveEdge((from, to)) => {
                     let (from, to) = match (
                         bincode::serialize(&from),
                         bincode::serialize(&to),
@@ -128,7 +128,7 @@ where
                         log::error!("Error while sending 'RemoveEdge' request. Error: {err}");
                     };
                 }
-                MutatinGraphQuery::AddNode((key, node)) => {
+                GraphMutation::AddNode((key, node)) => {
                     let (key, node) = match (
                         bincode::serialize(&key),
                         bincode::serialize(&node),
@@ -148,7 +148,7 @@ where
                         );
                     };
                 }
-                MutatinGraphQuery::RemoveNode(key) => {
+                GraphMutation::RemoveNode(key) => {
                     let key = match bincode::serialize(&key) {
                         Ok(key) => key,
                         Err(err) => {
@@ -168,6 +168,7 @@ where
 
         let actor_future = future.into_actor(self);
         ctx.spawn(actor_future);
-        Ok(())
+
+        Ok(GraphResponse::Empty)
     }
 }
