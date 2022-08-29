@@ -1,5 +1,3 @@
-use std::sync::{Arc, RwLock};
-
 use serde::{Deserialize, Serialize};
 
 use uuid::Uuid;
@@ -69,7 +67,7 @@ pub type SimpleDatabase =
 pub async fn setup(
     store_path: &'static str,
     port: u16,
-) -> (Arc<RwLock<SimpleDatabase>>, impl Fn() -> ()) {
+) -> (SimpleDatabase, impl Fn() -> ()) {
     let server_address = format!("http://127.0.0.1:{}", port);
 
     let database = GraphDatabase::run(

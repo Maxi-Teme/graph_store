@@ -12,11 +12,15 @@ use petgraph::Directed;
 mod client;
 mod database;
 mod graph;
+mod graph_store;
+mod mutations_log;
+mod mutations_log_store;
 mod remotes;
 mod server;
-mod store;
 
 pub use database::GraphDatabase;
+pub use remotes::{AddRemoteMessage, SendToNMessage};
+pub use mutations_log::{LogMessage};
 
 mod sync_graph {
     tonic::include_proto!("sync_graph");
@@ -44,7 +48,8 @@ pub trait GraphNodeIndex:
 {
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(deserialize = "N: DeserializeOwned"))]
 pub enum GraphMutation<N, E, I>
 where
     N: GraphNode + 'static,
@@ -55,6 +60,45 @@ where
     RemoveEdge((I, I)),
     AddNode((I, N)),
     RemoveNode(I),
+}
+
+impl<N, E, I> GraphMutation<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    pub fn get_hash(&self) -> String {
+        format!("{:x}", md5::compute(format!("{:?}", self)))
+    }
+}
+
+impl<N, E, I> TryFrom<Vec<u8>> for GraphMutation<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    type Error = StoreError;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        bincode::deserialize(&bytes)
+            .map_err(|_| StoreError::WriteLogError("".to_string()))
+    }
+}
+
+impl<N, E, I> TryInto<Vec<u8>> for GraphMutation<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    type Error = StoreError;
+
+    fn try_into(self) -> Result<Vec<u8>, Self::Error> {
+        bincode::serialize(&self)
+            .map_err(|_| StoreError::WriteLogError("".to_string()))
+    }
 }
 
 impl<N, E, I> Message for GraphMutation<N, E, I>
@@ -96,6 +140,7 @@ where
     type Result = Result<GraphResponse<N, E, I>, StoreError>;
 }
 
+#[derive(Debug)]
 pub enum GraphResponse<N, E, I>
 where
     N: GraphNode + 'static,
@@ -114,12 +159,6 @@ where
     Graph(StableGraph<N, E, Directed>),
 }
 
-pub struct RemotesMessage(String);
-
-impl Message for RemotesMessage {
-    type Result = Result<(), StoreError>;
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
 )]
@@ -136,22 +175,31 @@ pub enum StoreError {
     FileSaveError(String),
     FileLoadError(String),
     FileDecodeError(String),
-    PoisonError,
+    PoisonError(String),
     StoreError,
     SyncError(String),
     ClientSendError,
     ClientError,
-    MailboxError,
+    MailboxError(String),
+    MutationError,
+    WriteLogError(String),
+    SqliteError(String),
 }
 
 impl<T> From<PoisonError<T>> for StoreError {
-    fn from(_: PoisonError<T>) -> Self {
-        Self::PoisonError
+    fn from(err: PoisonError<T>) -> Self {
+        Self::PoisonError(format!("{err}"))
     }
 }
 
 impl From<MailboxError> for StoreError {
-    fn from(_: MailboxError) -> Self {
-        Self::MailboxError
+    fn from(err: MailboxError) -> Self {
+        Self::MailboxError(format!("{err}"))
+    }
+}
+
+impl From<rusqlite::Error> for StoreError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::SqliteError(format!("{err}"))
     }
 }

@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use actix::{Actor, AsyncContext, Context, Handler, WrapFuture};
 
 use futures_util::TryFutureExt;
@@ -10,21 +12,38 @@ use crate::sync_graph::{
     RemoveNodeRequest,
 };
 use crate::{
-    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphResponse,
-    RemotesMessage, StoreError,
+    AddRemoteMessage, GraphEdge, GraphMutation, GraphNode, GraphNodeIndex,
+    GraphResponse, StoreError,
 };
 
 #[derive(Debug, Clone)]
-pub struct GraphClient {
-    // addr: String,
+pub struct GraphClient<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
     client: SyncGraphClient<Channel>,
+    phantom_n: PhantomData<N>,
+    phantom_e: PhantomData<E>,
+    phantom_i: PhantomData<I>,
 }
 
-impl Actor for GraphClient {
+impl<N, E, I> Actor for GraphClient<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
     type Context = Context<Self>;
 }
 
-impl GraphClient {
+impl<N, E, I> GraphClient<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
     pub async fn new(endpoint: Endpoint) -> Result<Self, StoreError> {
         let client = SyncGraphClient::connect(endpoint)
             .map_err(|err| {
@@ -33,19 +52,31 @@ impl GraphClient {
             })
             .await?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            phantom_n: PhantomData,
+            phantom_e: PhantomData,
+            phantom_i: PhantomData,
+        })
     }
 }
 
-impl Handler<RemotesMessage> for GraphClient {
+impl<N, E, I> Handler<AddRemoteMessage> for GraphClient<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
     type Result = Result<(), StoreError>;
 
     fn handle(
         &mut self,
-        msg: RemotesMessage,
+        msg: AddRemoteMessage,
         ctx: &mut Self::Context,
     ) -> Self::Result {
-        let endpoint: Result<Endpoint, _> = msg.0.try_into();
+        let address = msg.0;
+
+        let endpoint: Result<Endpoint, _> = address.try_into();
 
         if let Ok(endpoint) = endpoint {
             let request = Request::new(AddRemoteRequest {
@@ -71,7 +102,7 @@ impl Handler<RemotesMessage> for GraphClient {
     }
 }
 
-impl<N, E, I> Handler<GraphMutation<N, E, I>> for GraphClient
+impl<N, E, I> Handler<GraphMutation<N, E, I>> for GraphClient<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,

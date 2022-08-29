@@ -9,15 +9,7 @@ service SyncGraph {
   rpc RemoveNode (RemoveNodeRequest) returns (ProcessResponse);
 }
 
-enum ResponseType {
-  OK = 0;
-  RETRY = 1;
-  ERROR = 2;
-}
-
-message ProcessResponse {
-  ResponseType response_type = 1;
-}
+message ProcessResponse {}
 
 message AddRemoteRequest {
   string address = 1;

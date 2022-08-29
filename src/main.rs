@@ -79,8 +79,6 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
     {
         if env::var("MAIN").is_ok() {
             database
-                .write()
-                .unwrap()
                 .add_node(
                     NodeKey(1),
                     NodeTypes {
@@ -92,8 +90,6 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
                 .unwrap();
         } else {
             database
-                .write()
-                .unwrap()
                 .add_node(
                     NodeKey(2),
                     NodeTypes {
@@ -111,8 +107,6 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
     {
         if env::var("MAIN").is_ok() {
             database
-                .write()
-                .unwrap()
                 .add_node(
                     NodeKey(3),
                     NodeTypes {
@@ -124,8 +118,6 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
                 .unwrap();
         } else {
             database
-                .write()
-                .unwrap()
                 .add_node(
                     NodeKey(4),
                     NodeTypes {
@@ -140,7 +132,7 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
 
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-    let graph = database.read().unwrap().get_graph().await.unwrap();
+    let graph = database.get_graph().await.unwrap();
     log::info!("Resulting Graph: '{:?}'", graph);
 
     tokio::time::sleep(tokio::time::Duration::from_secs(60 * 5)).await;

@@ -8,7 +8,7 @@ use petgraph::Directed;
 
 use crate::{GraphEdge, GraphNode, StoreError};
 
-const DEFAULT_STORE_PATH: &str = "data/graph_store";
+const DEFAULT_STORE_PATH: &str = "data/graph_store/graph";
 
 #[derive(Debug, Clone)]
 pub struct GraphStore<N, E> {

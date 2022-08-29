@@ -9,7 +9,7 @@ use petgraph::visit::{IntoEdgeReferences, IntoNodeReferences};
 use petgraph::Directed;
 use petgraph::Direction::{Incoming, Outgoing};
 
-use crate::store::GraphStore;
+use crate::graph_store::GraphStore;
 use crate::{
     GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphQuery,
     GraphResponse,
@@ -17,14 +17,12 @@ use crate::{
 
 use super::StoreError;
 
-// N = node type
-// E = edge type
 #[derive(Debug, Clone, Default)]
 pub struct Graph<N, E, I>
 where
-    N: GraphNode,
-    E: GraphEdge,
-    I: GraphNodeIndex + From<N>,
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
 {
     inner: StableGraph<N, E, Directed>,
     nodes_map: HashMap<I, NodeIndex>,
@@ -205,17 +203,18 @@ where
     }
 
     fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
-        if let Entry::Vacant(map_entry) = self.nodes_map.entry(key) {
-            let mut graph = self.inner.clone();
+        match self.nodes_map.entry(key) {
+            Entry::Vacant(vacant_entry) => {
+                let mut graph = self.inner.clone();
 
-            let new_node_index = graph.add_node(node.clone());
+                let new_node_index = graph.add_node(node.clone());
 
-            self.inner = self.store.save_to_file(graph)?;
-            map_entry.insert(new_node_index);
+                self.inner = self.store.save_to_file(graph)?;
+                vacant_entry.insert(new_node_index);
 
-            Ok(node)
-        } else {
-            Err(StoreError::ConflictDuplicateKey)
+                Ok(node)
+            }
+            Entry::Occupied(_) => Ok(node),
         }
     }
 

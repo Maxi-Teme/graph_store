@@ -1,4 +1,4 @@
-rm -f test-data/main/data.bin && \
+rm -rf test-data/main/ && \
   RUST_LOG=info \
   AGRAPHSTORE_PATH='test-data/main' \
   AGRAPHSTORE_SERVER_URL='http://127.0.0.1:50000' \
@@ -6,7 +6,7 @@ rm -f test-data/main/data.bin && \
   MAIN=true \
   cargo run
 
-rm -f test-data/remote/data.bin && \
+rm -rf test-data/remote/ && \
   RUST_LOG=info \
   AGRAPHSTORE_PATH='test-data/remote' \
   AGRAPHSTORE_SERVER_URL='http://127.0.0.1:50001' \

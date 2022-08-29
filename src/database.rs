@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::mpsc::{sync_channel, Receiver};
-use std::sync::{Arc, RwLock};
 
 use actix::{Actor, Addr};
 
@@ -10,12 +9,12 @@ use petgraph::Directed;
 use url::Url;
 
 use crate::graph::Graph;
+use crate::mutations_log::MutationsLog;
 use crate::remotes::Remotes;
 use crate::server::GraphServer;
-
 use crate::{
     GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphQuery,
-    GraphResponse, StoreError,
+    GraphResponse, LogMessage, StoreError,
 };
 
 #[derive(Debug)]
@@ -26,7 +25,7 @@ where
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
     graph: Addr<Graph<N, E, I>>,
-    remotes: Addr<Remotes>,
+    mutations_log: Addr<MutationsLog<N, E, I>>,
 }
 
 impl<N, E, I> GraphDatabase<N, E, I>
@@ -41,15 +40,22 @@ where
         store_path: Option<String>,
         server_url: String,
         initial_remote_addresses: Vec<String>,
-    ) -> Result<Receiver<Arc<RwLock<Self>>>, StoreError> {
-        let graph = Graph::<N, E, I>::new(store_path)?.start();
-        let graph2 = graph.clone();
+    ) -> Result<Receiver<Self>, StoreError> {
+        let graph = Graph::<N, E, I>::new(store_path.clone())?.start();
 
         let remotes =
             Remotes::new(server_url.clone(), initial_remote_addresses)
                 .await
                 .start();
-        let remotes2 = remotes.clone();
+
+        let mutations_log = MutationsLog::new(
+            graph.clone(),
+            remotes.clone(),
+            store_path.clone(),
+        )
+        .await
+        .unwrap()
+        .start();
 
         let server_address = match Url::parse(&server_url) {
             Ok(url) => match (url.host_str(), url.port()) {
@@ -76,9 +82,14 @@ Error: '{err}'"
             }
         };
 
+        let mutations_log2 = mutations_log.clone();
         actix_rt::spawn(async move {
-            if let Err(err) =
-                GraphServer::run(server_address, graph2, remotes2).await
+            if let Err(err) = GraphServer::run(
+                server_address,
+                mutations_log2,
+                remotes.clone(),
+            )
+            .await
             {
                 log::error!(
                     "Error while starting GraphServer. Error: '{err:?}'"
@@ -86,10 +97,13 @@ Error: '{err}'"
             };
         });
 
-        let (tx, rx) = sync_channel::<Arc<RwLock<Self>>>(1);
+        let (tx, rx) = sync_channel::<Self>(1);
 
-        tx.send(Arc::new(RwLock::new(Self { graph, remotes })))
-            .unwrap();
+        tx.send(Self {
+            graph,
+            mutations_log,
+        })
+        .unwrap();
 
         Ok(rx)
     }
@@ -99,61 +113,73 @@ Error: '{err}'"
     //
     // mutating queries
     pub async fn add_edge(
-        &mut self,
+        &self,
         from: I,
         to: I,
         edge: E,
     ) -> Result<(), StoreError> {
         let query = GraphMutation::AddEdge((from, to, edge));
 
-        self.graph.send(query.clone()).await??;
-        self.remotes.do_send(query);
+        self.mutations_log
+            .send(LogMessage::Replicated(query))
+            .await??;
 
         Ok(())
     }
 
-    pub async fn remove_edge(
-        &mut self,
-        from: I,
-        to: I,
-    ) -> Result<E, StoreError> {
+    pub async fn remove_edge(&self, from: I, to: I) -> Result<E, StoreError> {
         let query = GraphMutation::RemoveEdge((from, to));
 
-        if let GraphResponse::Edge(edge) =
-            self.graph.send(query.clone()).await??
+        if let GraphResponse::Edge(edge) = self
+            .mutations_log
+            .send(LogMessage::Replicated(query))
+            .await??
         {
-            self.remotes.do_send(query);
-
             Ok(edge)
         } else {
+            log::error!(
+                "[GraphDatabase.add_node] \
+Expected mutations_log to return Edge."
+            );
             Err(StoreError::EdgeNotDeleted)
         }
     }
 
-    pub async fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
+    pub async fn add_node(&self, key: I, node: N) -> Result<N, StoreError> {
         let query = GraphMutation::AddNode((key, node));
 
-        if let GraphResponse::Node(node) =
-            self.graph.send(query.clone()).await??
-        {
-            self.remotes.do_send(query);
+        let result = self
+            .mutations_log
+            .send(LogMessage::Replicated(query))
+            .await??;
 
-            Ok(node)
-        } else {
-            Err(StoreError::NodeNotCreated)
+        match result {
+            GraphResponse::Node(node) => Ok(node),
+            _ => {
+                log::error!(
+                    "[GraphDatabase.add_node] \
+Expected mutations_log to return Node got {:?}",
+                    result
+                );
+                Err(StoreError::NodeNotCreated)
+            }
         }
     }
 
-    pub async fn remove_node(&mut self, key: I) -> Result<N, StoreError> {
+    pub async fn remove_node(&self, key: I) -> Result<N, StoreError> {
         let query = GraphMutation::RemoveNode(key);
 
-        if let GraphResponse::Node(node) =
-            self.graph.send(query.clone()).await??
+        if let GraphResponse::Node(node) = self
+            .mutations_log
+            .send(LogMessage::Replicated(query))
+            .await??
         {
-            self.remotes.do_send(query);
-
             Ok(node)
         } else {
+            log::error!(
+                "[GraphDatabase.add_node] \
+Expected mutations_log to return Node."
+            );
             Err(StoreError::NodeNotDeleted)
         }
     }
@@ -167,6 +193,10 @@ Error: '{err}'"
         if let GraphResponse::Graph(graph) = self.graph.send(query).await?? {
             Ok(graph)
         } else {
+            log::error!(
+                "[GraphDatabase.add_node] \
+Expected mutations_log to return Graph."
+            );
             Err(StoreError::GraphNotFound)
         }
     }
@@ -181,6 +211,10 @@ Error: '{err}'"
         if let GraphResponse::Graph(graph) = self.graph.send(query).await?? {
             Ok(graph)
         } else {
+            log::error!(
+                "[GraphDatabase.add_node] \
+Expected mutations_log to return Graph."
+            );
             Err(StoreError::GraphNotFound)
         }
     }
