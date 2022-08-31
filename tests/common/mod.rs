@@ -36,6 +36,13 @@ impl GraphEdge for SimpleEdgeType {}
 pub struct SimpleNodeType {
     pub id: Uuid,
 }
+
+impl SimpleNodeType {
+    pub fn new(id: Uuid) -> Self {
+        Self { id }
+    }
+}
+
 impl GraphNode for SimpleNodeType {}
 
 #[derive(
@@ -67,22 +74,19 @@ pub type SimpleDatabase =
 pub async fn setup(
     store_path: &'static str,
     port: u16,
-) -> (SimpleDatabase, impl Fn() -> ()) {
+    initial_remotes: Vec<String>,
+) -> SimpleDatabase {
+    if std::path::Path::new(store_path).is_dir() {
+        std::fs::remove_dir_all(store_path).unwrap();
+    }
+
     let server_address = format!("http://127.0.0.1:{}", port);
 
-    let database = GraphDatabase::run(
+    GraphDatabase::run(
         Some(store_path.to_string()),
         server_address,
-        vec![],
+        initial_remotes,
     )
     .await
     .unwrap()
-    .recv()
-    .unwrap();
-
-    let teardown = move || {
-        std::fs::remove_dir_all(store_path).unwrap();
-    };
-
-    (database, teardown)
 }

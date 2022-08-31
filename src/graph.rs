@@ -214,7 +214,7 @@ where
 
                 Ok(node)
             }
-            Entry::Occupied(_) => Ok(node),
+            Entry::Occupied(_) => Err(StoreError::ConflictDuplicateKey),
         }
     }
 
@@ -488,6 +488,10 @@ mod tests {
     async fn test_store_from_env_ok() {
         let test_dir = "test-data/test_store_from_env_ok";
 
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
+
         let mut graph = Graph::<
             SimpleNodeType,
             SimpleEdgeType,
@@ -506,12 +510,18 @@ mod tests {
         let nodes = graph.get_nodes().unwrap();
         assert_eq!(nodes.len(), 2);
 
-        std::fs::remove_dir_all(test_dir).unwrap();
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
     }
 
     #[tokio::test]
     async fn test_store_add_node_duplicate_key_nok() {
         let test_dir = "test-data/test_store_add_node_duplicate_key_nok";
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
+
         let mut graph = Graph::<
             SimpleNodeType,
             SimpleEdgeType,
@@ -523,17 +533,23 @@ mod tests {
         let node = SimpleNodeType { id };
 
         graph.add_node(SimpleNodeWeightIndex(id), node).unwrap();
+
         assert_eq!(
             graph.add_node(SimpleNodeWeightIndex(id), node),
             Err(StoreError::ConflictDuplicateKey)
         );
 
-        std::fs::remove_dir_all(test_dir).unwrap();
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
     }
 
     #[tokio::test]
     async fn test_store_add_node_duplicate_combined_key_nok() {
         let test_dir = "test-data/duplicate_combined_key";
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
 
         #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
         struct CombinedNodeType {
@@ -592,6 +608,8 @@ mod tests {
 
         assert_eq!(result, Err(StoreError::ConflictDuplicateKey));
 
-        std::fs::remove_dir_all(test_dir).unwrap();
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
     }
 }

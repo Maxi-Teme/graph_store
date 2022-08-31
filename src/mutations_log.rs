@@ -91,37 +91,40 @@ where
         let graph = self.graph.clone();
         let mutations_log_store = self.mutations_log_store.clone();
 
-        match msg {
-            LogMessage::Replicated(graph_mutation) => async move {
-                mutations_log_store
-                    .send(MutationsLogStoreMessage::Add(graph_mutation.clone()))
-                    .await??;
+        async move {
+            match msg {
+                LogMessage::Replicated(graph_mutation) => {
+                    mutations_log_store
+                        .send(MutationsLogStoreMessage::Add(
+                            graph_mutation.clone(),
+                        ))
+                        .await??;
 
-                remotes.do_send(graph_mutation.clone());
+                    remotes.do_send(graph_mutation.clone());
 
-                remotes
-                    .send(SendToNMessage(graph_mutation.clone()))
-                    .await??;
+                    remotes
+                        .send(SendToNMessage(graph_mutation.clone()))
+                        .await??;
 
-                mutations_log_store
-                    .send(MutationsLogStoreMessage::Commit(
-                        graph_mutation.clone(),
-                    ))
-                    .await??;
+                    mutations_log_store
+                        .send(MutationsLogStoreMessage::Commit(
+                            graph_mutation.clone(),
+                        ))
+                        .await??;
 
-                graph.send(graph_mutation.clone()).await?
+                    graph.send(graph_mutation.clone()).await?
+                }
+                LogMessage::Single(graph_mutation) => {
+                    mutations_log_store
+                        .send(MutationsLogStoreMessage::Commit(
+                            graph_mutation.clone(),
+                        ))
+                        .await??;
+
+                    graph.send(graph_mutation.clone()).await?
+                }
             }
-            .interop_actor_boxed(self),
-            LogMessage::Single(graph_mutation) => async move {
-                mutations_log_store
-                    .send(MutationsLogStoreMessage::Commit(
-                        graph_mutation.clone(),
-                    ))
-                    .await??;
-
-                graph.send(graph_mutation.clone()).await?
-            }
-            .interop_actor_boxed(self),
         }
+        .interop_actor_boxed(self)
     }
 }

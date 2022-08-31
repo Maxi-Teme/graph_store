@@ -71,8 +71,6 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
         initial_remote_addresses,
     )
     .await
-    .unwrap()
-    .recv()
     .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;

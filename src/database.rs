@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::mpsc::{sync_channel, Receiver};
 
 use actix::{Actor, Addr};
 
@@ -40,7 +39,7 @@ where
         store_path: Option<String>,
         server_url: String,
         initial_remote_addresses: Vec<String>,
-    ) -> Result<Receiver<Self>, StoreError> {
+    ) -> Result<Self, StoreError> {
         let graph = Graph::<N, E, I>::new(store_path.clone())?.start();
 
         let remotes = Remotes::new().start();
@@ -94,15 +93,10 @@ Error: '{err}'"
             })
             .await??;
 
-        let (tx, rx) = sync_channel::<Self>(1);
-
-        tx.send(Self {
+        Ok(Self {
             graph,
             mutations_log,
         })
-        .unwrap();
-
-        Ok(rx)
     }
 
     //
