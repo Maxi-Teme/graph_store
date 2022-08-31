@@ -10,12 +10,12 @@ use crate::mutations_log::MutationsLog;
 use crate::remotes::Remotes;
 use crate::sync_graph::sync_graph_server::{SyncGraph, SyncGraphServer};
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, AddRemoteRequest, ProcessResponse,
-    RemoveEdgeRequest, RemoveNodeRequest,
+    AddEdgeRequest, AddNodeRequest, ProcessResponse, RemotesLogRequest,
+    RemotesLogResponse, RemoveEdgeRequest, RemoveNodeRequest,
 };
 use crate::{
-    AddRemoteMessage, GraphEdge, GraphMutation, GraphNode, GraphNodeIndex,
-    LogMessage, StoreError,
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, LogMessage,
+    StoreError, SyncRemotesMessage,
 };
 
 #[derive(Debug)]
@@ -25,6 +25,7 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
+    server_address: String,
     mutations_log: Addr<MutationsLog<N, E, I>>,
     remotes: Addr<Remotes<N, E, I>>,
 }
@@ -35,28 +36,24 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    pub async fn run(
+    pub fn run(
         server_address: SocketAddr,
         mutations_log: Addr<MutationsLog<N, E, I>>,
         remotes: Addr<Remotes<N, E, I>>,
     ) -> Result<(), StoreError> {
         let sync_graph_server = Self {
+            server_address: server_address.clone().to_string(),
             mutations_log,
             remotes,
         };
         let service = SyncGraphServer::new(sync_graph_server);
 
         tokio::spawn(async move {
-            match Server::builder()
+            Server::builder()
                 .add_service(service)
                 .serve(server_address)
                 .await
-            {
-                Ok(()) => log::info!("Initialized server"),
-                Err(err) => {
-                    panic!("Error while starting gRPC server. Error: '{err}'")
-                }
-            }
+                .unwrap()
         });
 
         Ok(())
@@ -70,23 +67,38 @@ where
     E: GraphEdge + Unpin,
     I: GraphNodeIndex + From<N> + Unpin,
 {
-    async fn add_remote(
+    async fn sync_remotes(
         &self,
-        request: Request<AddRemoteRequest>,
-    ) -> Result<Response<ProcessResponse>, Status> {
-        let AddRemoteRequest { address } = request.into_inner();
+        request: Request<RemotesLogRequest>,
+    ) -> Result<Response<RemotesLogResponse>, Status> {
+        let RemotesLogRequest {
+            from_server,
+            remotes_log,
+        } = request.into_inner();
 
-        if let Err(err) =
-            self.remotes.send(AddRemoteMessage(address.clone())).await
+        // pass RemotesLogRequest to remotes
+        match self
+            .remotes
+            .send(SyncRemotesMessage {
+                from: from_server.clone(),
+                flat_remotes_log: remotes_log,
+            })
+            .await
+            .map_err(|err| Status::internal(format!("{}", err)))?
         {
-            let msg = format!(
-                "RemotesTasks::AddRemote({}) failed. Error: '{}'",
-                address, err
-            );
-            return Err(Status::internal(msg));
-        };
-
-        Ok(Response::new(ProcessResponse {}))
+            // respond with own flat_remotes_log
+            Ok(flat_remotes_log) => Ok(Response::new(RemotesLogResponse {
+                from_server: self.server_address.clone(),
+                remotes_log: flat_remotes_log,
+            })),
+            Err(err) => {
+                let msg = format!(
+                    "SyncRemotesMessage({:?}) failed. Error: '{:?}'",
+                    self.server_address, err
+                );
+                Err(Status::internal(msg))
+            }
+        }
     }
 
     async fn add_edge(

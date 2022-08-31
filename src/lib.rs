@@ -19,8 +19,8 @@ mod remotes;
 mod server;
 
 pub use database::GraphDatabase;
-pub use remotes::{AddRemoteMessage, SendToNMessage};
-pub use mutations_log::{LogMessage};
+pub use mutations_log::LogMessage;
+pub use remotes::{SendToNMessage, SyncRemotesMessage};
 
 mod sync_graph {
     tonic::include_proto!("sync_graph");

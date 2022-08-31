@@ -2,18 +2,15 @@ syntax = "proto3";
 package sync_graph;
 
 service SyncGraph {
-  rpc AddRemote (AddRemoteRequest) returns (ProcessResponse);
   rpc AddEdge (AddEdgeRequest) returns (ProcessResponse);
   rpc RemoveEdge (RemoveEdgeRequest) returns (ProcessResponse);
   rpc AddNode (AddNodeRequest) returns (ProcessResponse);
   rpc RemoveNode (RemoveNodeRequest) returns (ProcessResponse);
+
+  rpc SyncRemotes (RemotesLogRequest) returns (RemotesLogResponse);
 }
 
 message ProcessResponse {}
-
-message AddRemoteRequest {
-  string address = 1;
-}
 
 message AddEdgeRequest {
   bytes from = 1;
@@ -33,4 +30,14 @@ message AddNodeRequest {
 
 message RemoveNodeRequest {
   bytes key = 1;
+}
+
+message RemotesLogRequest {
+  string from_server = 1;
+  map<string, bool> remotes_log = 2;
+}
+
+message RemotesLogResponse {
+  string from_server = 1;
+  map<string, bool> remotes_log = 2;
 }

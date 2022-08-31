@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+use std::error::Error;
 use std::marker::PhantomData;
 
-use actix::{Actor, AsyncContext, Context, Handler, WrapFuture};
+use actix::{
+    Actor, AsyncContext, Context, Handler, ResponseActFuture, WrapFuture,
+};
 
 use futures_util::TryFutureExt;
 use tonic::transport::{Channel, Endpoint};
@@ -8,12 +12,12 @@ use tonic::Request;
 
 use crate::sync_graph::sync_graph_client::SyncGraphClient;
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, AddRemoteRequest, RemoveEdgeRequest,
+    AddEdgeRequest, AddNodeRequest, RemotesLogRequest, RemoveEdgeRequest,
     RemoveNodeRequest,
 };
 use crate::{
-    AddRemoteMessage, GraphEdge, GraphMutation, GraphNode, GraphNodeIndex,
-    GraphResponse, StoreError,
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphResponse,
+    StoreError, SyncRemotesMessage,
 };
 
 #[derive(Debug, Clone)]
@@ -44,10 +48,18 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    pub async fn new(endpoint: Endpoint) -> Result<Self, StoreError> {
-        let client = SyncGraphClient::connect(endpoint)
+    pub async fn new(address: String) -> Result<Self, StoreError> {
+        let endpoint = Endpoint::try_from(address)
+            .map_err(|_err| StoreError::ParseError)?;
+
+        let client = SyncGraphClient::connect(endpoint.clone())
             .map_err(|err| {
-                log::warn!("Could not connect client. Error: '{err}'");
+                log::warn!(
+                    "Could not connect client at {:?}. Error: '{}' source: '{:?}'",
+                    endpoint.uri(),
+                    err,
+                    err.source(),
+                );
                 StoreError::ClientError
             })
             .await?;
@@ -61,44 +73,50 @@ where
     }
 }
 
-impl<N, E, I> Handler<AddRemoteMessage> for GraphClient<N, E, I>
+impl<N, E, I> Handler<SyncRemotesMessage> for GraphClient<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<(), StoreError>;
+    type Result =
+        ResponseActFuture<Self, Result<HashMap<String, bool>, StoreError>>;
 
     fn handle(
         &mut self,
-        msg: AddRemoteMessage,
-        ctx: &mut Self::Context,
+        msg: SyncRemotesMessage,
+        _ctx: &mut Self::Context,
     ) -> Self::Result {
-        let address = msg.0;
+        let SyncRemotesMessage {
+            from,
+            flat_remotes_log,
+        } = msg;
 
-        let endpoint: Result<Endpoint, _> = address.try_into();
+        let request = Request::new(RemotesLogRequest {
+            from_server: from,
+            remotes_log: flat_remotes_log,
+        });
 
-        if let Ok(endpoint) = endpoint {
-            let request = Request::new(AddRemoteRequest {
-                address: endpoint.uri().to_string(),
-            });
+        let mut client = self.client.clone();
 
-            let mut client = self.client.clone();
-
-            let future = Box::pin(async move {
-                if let Err(err) = client.add_remote(request).await {
+        let future = Box::pin(async move {
+            match client.sync_remotes(request).await {
+                Ok(response) => {
+                    let response = response.into_inner();
+                    Ok(response.remotes_log)
+                }
+                Err(err) => {
                     log::error!(
                         "Error sending add_remote request. Error: '{err}'"
                     );
+                    Err(StoreError::ClientError)
                 }
-            });
+            }
+        });
 
-            let actor_future = future.into_actor(self);
-            ctx.spawn(actor_future);
-            Ok(())
-        } else {
-            Err(StoreError::ParseError)
-        }
+        let actor_future = future.into_actor(self);
+
+        Box::pin(actor_future)
     }
 }
 

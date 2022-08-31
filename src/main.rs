@@ -57,7 +57,8 @@ async fn main() -> Result<(), std::io::Error> {
             .collect();
 
     log::info!(
-        "AGRAPHSTORE_PATH: {:?}, AGRAPHSTORE_SERVER_URL: {:?}, \
+        "AGRAPHSTORE_PATH: {:?}, \
+AGRAPHSTORE_SERVER_URL: {:?}, \
 AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
         store_path,
         server_address,
@@ -74,7 +75,7 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
     .recv()
     .unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
 
     {
         if env::var("MAIN").is_ok() {
@@ -102,7 +103,7 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
         }
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
     log::info!("UPDATING GRAPH SECOND TIME");
     {
         if env::var("MAIN").is_ok() {
@@ -130,7 +131,7 @@ AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
         }
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
     let graph = database.get_graph().await.unwrap();
     log::info!("Resulting Graph: '{:?}'", graph);

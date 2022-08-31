@@ -10,7 +10,7 @@ use url::Url;
 
 use crate::graph::Graph;
 use crate::mutations_log::MutationsLog;
-use crate::remotes::Remotes;
+use crate::remotes::{InitializeRemotes, Remotes};
 use crate::server::GraphServer;
 use crate::{
     GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphQuery,
@@ -43,10 +43,7 @@ where
     ) -> Result<Receiver<Self>, StoreError> {
         let graph = Graph::<N, E, I>::new(store_path.clone())?.start();
 
-        let remotes =
-            Remotes::new(server_url.clone(), initial_remote_addresses)
-                .await
-                .start();
+        let remotes = Remotes::new().start();
 
         let mutations_log = MutationsLog::new(
             graph.clone(),
@@ -82,20 +79,20 @@ Error: '{err}'"
             }
         };
 
-        let mutations_log2 = mutations_log.clone();
-        actix_rt::spawn(async move {
-            if let Err(err) = GraphServer::run(
-                server_address,
-                mutations_log2,
-                remotes.clone(),
-            )
-            .await
-            {
-                log::error!(
-                    "Error while starting GraphServer. Error: '{err:?}'"
-                );
-            };
-        });
+        if let Err(err) = GraphServer::run(
+            server_address,
+            mutations_log.clone(),
+            remotes.clone(),
+        ) {
+            log::error!("Error while starting GraphServer. Error: '{err:?}'");
+        };
+
+        remotes
+            .send(InitializeRemotes {
+                initial_addresses: initial_remote_addresses,
+                server_address: server_url,
+            })
+            .await??;
 
         let (tx, rx) = sync_channel::<Self>(1);
 
