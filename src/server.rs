@@ -6,12 +6,13 @@ use actix::Addr;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use crate::mutations_log::MutationsLog;
+use crate::mutations_log::{MutationsLog, MutationsLogQuery};
 use crate::remotes::Remotes;
 use crate::sync_graph::sync_graph_server::{SyncGraph, SyncGraphServer};
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, ProcessResponse, RemotesLogRequest,
-    RemotesLogResponse, RemoveEdgeRequest, RemoveNodeRequest,
+    AddEdgeRequest, AddNodeRequest, MutationsLogRequest, MutationsLogResponse,
+    ProcessResponse, RemotesLogRequest, RemotesLogResponse, RemoveEdgeRequest,
+    RemoveNodeRequest,
 };
 use crate::{
     GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, LogMessage,
@@ -101,6 +102,37 @@ where
         }
     }
 
+    async fn sync_mutations_log(
+        &self,
+        _request: Request<MutationsLogRequest>,
+    ) -> Result<Response<MutationsLogResponse>, Status> {
+        match self.mutations_log.send(MutationsLogQuery::INST).await {
+            Ok(inner) => match inner {
+                Ok(mutations_log) => {
+                    let mutations_log: Vec<u8> =
+                        bincode::serialize(&mutations_log)
+                            .map_err(|err| Status::internal(err.to_string()))?;
+
+                    Ok(Response::new(MutationsLogResponse { mutations_log }))
+                }
+                Err(err) => {
+                    log::error!(
+                        "Error while getting mutations log. Error: {:?}",
+                        err
+                    );
+                    Err(Status::internal(err.to_string()))
+                }
+            },
+            Err(err) => {
+                log::error!(
+                    "Error while sending MutationsLogQuery. Error: {}",
+                    err
+                );
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
     async fn add_edge(
         &self,
         request: Request<AddEdgeRequest>,
@@ -110,10 +142,11 @@ where
         let from: I = match bincode::deserialize(&from) {
             Ok(from) => from,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'from'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'from'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -122,10 +155,11 @@ Error: {}", err);
         let to: I = match bincode::deserialize(&to) {
             Ok(to) => to,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'to'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'to'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -134,10 +168,11 @@ Error: {}", err);
         let edge: E = match bincode::deserialize(&edge) {
             Ok(edge) => edge,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'edge'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'edge'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -145,7 +180,7 @@ Error: {}", err);
 
         let query = GraphMutation::AddEdge((from, to, edge));
 
-        match self.mutations_log.send(LogMessage::Single(query)).await {
+        match self.mutations_log.send(LogMessage::Commit(query)).await {
             Ok(inner) => match inner {
                 Ok(_) => Ok(Response::new(ProcessResponse {})),
                 Err(err) => {
@@ -175,10 +210,11 @@ Error: {}", err);
         let from: I = match bincode::deserialize(&from) {
             Ok(from) => from,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'from'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'from'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -187,10 +223,11 @@ Error: {}", err);
         let to: I = match bincode::deserialize(&to) {
             Ok(to) => to,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'to'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'to'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -198,7 +235,7 @@ Error: {}", err);
 
         let query = GraphMutation::RemoveEdge((from, to));
 
-        match self.mutations_log.send(LogMessage::Single(query)).await {
+        match self.mutations_log.send(LogMessage::Commit(query)).await {
             Ok(inner) => match inner {
                 Ok(_) => Ok(Response::new(ProcessResponse {})),
                 Err(err) => {
@@ -228,10 +265,11 @@ Error: {}", err);
         let key: I = match bincode::deserialize(&key) {
             Ok(key) => key,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'key'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'key'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -240,10 +278,11 @@ Error: {}", err);
         let node: N = match bincode::deserialize(&node) {
             Ok(node) => node,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'node'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'node'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -251,7 +290,7 @@ Error: {}", err);
 
         let query = GraphMutation::AddNode((key, node));
 
-        match self.mutations_log.send(LogMessage::Single(query)).await {
+        match self.mutations_log.send(LogMessage::Commit(query)).await {
             Ok(inner) => match inner {
                 Ok(_) => Ok(Response::new(ProcessResponse {})),
                 Err(err) => {
@@ -281,10 +320,11 @@ Error: {}", err);
         let key: I = match bincode::deserialize(&key) {
             Ok(key) => key,
             Err(err) => {
-                let msg =
-                    format!(
-                    "[GraphServer.add_edge] Error while deserializing 'key'. \
-Error: {}", err);
+                let msg = format!(
+                    "[GraphServer.add_edge] Error while \
+deserializing 'key'. Error: {}",
+                    err
+                );
                 log::error!("{msg}");
                 return Err(Status::internal(msg));
             }
@@ -292,7 +332,7 @@ Error: {}", err);
 
         let query = GraphMutation::RemoveNode(key);
 
-        match self.mutations_log.send(LogMessage::Single(query)).await {
+        match self.mutations_log.send(LogMessage::Commit(query)).await {
             Ok(inner) => match inner {
                 Ok(_) => Ok(Response::new(ProcessResponse {})),
                 Err(err) => {

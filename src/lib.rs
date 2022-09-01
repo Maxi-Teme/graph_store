@@ -18,9 +18,10 @@ mod mutations_log_store;
 mod remotes;
 mod server;
 
+pub(crate) use client::GraphClient;
 pub use database::GraphDatabase;
-pub use mutations_log::LogMessage;
-pub use remotes::{SendToNMessage, SyncRemotesMessage};
+pub(crate) use mutations_log::LogMessage;
+pub(crate) use remotes::{SendToNMessage, SyncRemotesMessage};
 
 mod sync_graph {
     tonic::include_proto!("sync_graph");
@@ -201,5 +202,11 @@ impl From<MailboxError> for StoreError {
 impl From<rusqlite::Error> for StoreError {
     fn from(err: rusqlite::Error) -> Self {
         Self::SqliteError(format!("{err}"))
+    }
+}
+
+impl ToString for StoreError {
+    fn to_string(&self) -> String {
+        format!("{:?}", self)
     }
 }

@@ -7,6 +7,8 @@ const TOTAL_NODES: usize = 3;
 
 #[actix_rt::test]
 async fn test_initial_data_synchronization() {
+    env_logger::init();
+
     let root_test_path = "test-data/test_two_nodes_ok";
 
     let test_dir1 = "test-data/test_two_nodes_ok/node1";
@@ -69,7 +71,10 @@ async fn test_initial_data_synchronization() {
 
     assert_eq!(nodes1.len(), TOTAL_NODES);
     assert_eq!(nodes2.len(), TOTAL_NODES);
-    assert_eq!(nodes1, nodes2);
+
+    for node in nodes1 {
+        assert!(nodes2.contains(&node))
+    }
 
     if std::path::Path::new(root_test_path).is_dir() {
         std::fs::remove_dir_all(root_test_path).unwrap();

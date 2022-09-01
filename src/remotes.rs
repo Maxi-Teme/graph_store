@@ -4,11 +4,12 @@ use actix::{
     Actor, ActorFutureExt, Addr, Context, Handler, Message, ResponseActFuture,
     WrapFuture,
 };
+use actix_interop::FutureInterop;
 use rand::seq::SliceRandom;
 
 use crate::{
-    client::GraphClient, GraphEdge, GraphMutation, GraphNode, GraphNodeIndex,
-    GraphResponse, StoreError,
+    mutations_log::MutationsLogQuery, GraphClient, GraphEdge, GraphMutation,
+    GraphNode, GraphNodeIndex, GraphResponse, StoreError,
 };
 
 pub struct SyncRemotesMessage {
@@ -32,15 +33,6 @@ where
     E: GraphEdge + 'static,
     I: GraphNodeIndex + From<N> + 'static,
 {
-    type Result = Result<(), StoreError>;
-}
-
-pub struct InitializeRemotes {
-    pub initial_addresses: Vec<String>,
-    pub server_address: String,
-}
-
-impl Message for InitializeRemotes {
     type Result = Result<(), StoreError>;
 }
 
@@ -87,85 +79,6 @@ where
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
     type Context = Context<Self>;
-}
-
-impl<N, E, I> Handler<InitializeRemotes> for Remotes<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    type Result = ResponseActFuture<Self, Result<(), StoreError>>;
-
-    fn handle(
-        &mut self,
-        msg: InitializeRemotes,
-        _ctx: &mut Self::Context,
-    ) -> Self::Result {
-        let initial_addresses = msg.initial_addresses;
-        let server_address = msg.server_address;
-        let mut remote_addresses: HashMap<String, Addr<_>> = HashMap::new();
-        let mut initial_flat_remotes_log: HashMap<String, bool> =
-            HashMap::new();
-
-        let future = Box::pin(async move {
-            // build up initial clients
-            for address in initial_addresses {
-                if let Ok(client) = GraphClient::new(address.clone()).await {
-                    let client_addr = client.start();
-
-                    remote_addresses.insert(address.clone(), client_addr);
-                    initial_flat_remotes_log.insert(address, true);
-                }
-            }
-
-            let mut remotes: HashMap<String, RemotesEntry<N, E, I>> =
-                HashMap::new();
-
-            // send RemotesLogRequest to all known remotes
-            for (remote_from, addr) in remote_addresses.iter() {
-                let remotes_log_result = match addr
-                    .send(SyncRemotesMessage {
-                        from: server_address.to_owned(),
-                        flat_remotes_log: initial_flat_remotes_log.clone(),
-                    })
-                    .await
-                {
-                    Ok(send_result) => send_result,
-                    Err(err) => {
-                        log::error!(
-                            "[Remotes.new] Error while passing message to \
-GraphClient. Error: '{:?}'",
-                            err
-                        );
-                        Err(StoreError::from(err))
-                    }
-                };
-
-                let remotes_entry = RemotesEntry {
-                    client_addr: (*addr).clone(),
-                    remotes_log: remotes_log_result,
-                };
-
-                remotes.insert((*remote_from).to_owned(), remotes_entry);
-            }
-
-            log::info!(
-                "Remotes initialized with initial remotes: '{:?}'",
-                remotes
-            );
-
-            remotes
-        });
-
-        let actor_future =
-            future.into_actor(self).map(|remotes, actor, _ctx| {
-                actor.remotes = remotes;
-                Ok(())
-            });
-
-        Box::pin(actor_future)
-    }
 }
 
 impl<N, E, I> Handler<GraphMutation<N, E, I>> for Remotes<N, E, I>
@@ -314,5 +227,135 @@ where
         );
 
         Box::pin(actor_future)
+    }
+}
+
+pub struct InitializeRemotes {
+    pub initial_addresses: Vec<String>,
+    pub server_address: String,
+}
+
+impl Message for InitializeRemotes {
+    type Result = Result<(), StoreError>;
+}
+
+impl<N, E, I> Handler<InitializeRemotes> for Remotes<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = ResponseActFuture<Self, Result<(), StoreError>>;
+
+    fn handle(
+        &mut self,
+        msg: InitializeRemotes,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let initial_addresses = msg.initial_addresses;
+        let server_address = msg.server_address;
+        let mut remote_addresses: HashMap<String, Addr<_>> = HashMap::new();
+        let mut initial_flat_remotes_log: HashMap<String, bool> =
+            HashMap::new();
+
+        let future = Box::pin(async move {
+            // build up initial clients
+            for address in initial_addresses {
+                if let Ok(client) = GraphClient::new(address.clone()).await {
+                    let client_addr = client.start();
+
+                    remote_addresses.insert(address.clone(), client_addr);
+                    initial_flat_remotes_log.insert(address, true);
+                }
+            }
+
+            let mut remotes: HashMap<String, RemotesEntry<N, E, I>> =
+                HashMap::new();
+
+            // send RemotesLogRequest to all known remotes
+            for (remote_from, addr) in remote_addresses.iter() {
+                let remotes_log_result = match addr
+                    .send(SyncRemotesMessage {
+                        from: server_address.to_owned(),
+                        flat_remotes_log: initial_flat_remotes_log.clone(),
+                    })
+                    .await
+                {
+                    Ok(send_result) => send_result,
+                    Err(err) => {
+                        log::error!(
+                            "[Remotes.new] Error while passing message to \
+GraphClient. Error: '{:?}'",
+                            err
+                        );
+                        Err(StoreError::from(err))
+                    }
+                };
+
+                let remotes_entry = RemotesEntry {
+                    client_addr: (*addr).clone(),
+                    remotes_log: remotes_log_result,
+                };
+
+                remotes.insert((*remote_from).to_owned(), remotes_entry);
+            }
+
+            log::info!(
+                "Remotes initialized with initial remotes: '{:?}'",
+                remotes
+            );
+
+            remotes
+        });
+
+        let actor_future =
+            future.into_actor(self).map(|remotes, actor, _ctx| {
+                actor.remotes = remotes;
+                Ok(())
+            });
+
+        Box::pin(actor_future)
+    }
+}
+
+impl<N, E, I> Handler<MutationsLogQuery<N, E, I>> for Remotes<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = ResponseActFuture<
+        Self,
+        Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>,
+    >;
+
+    fn handle(
+        &mut self,
+        _msg: MutationsLogQuery<N, E, I>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let clients: Vec<Addr<GraphClient<N, E, I>>> = self
+            .remotes
+            .clone()
+            .into_iter()
+            .map(|(_, entry)| entry.client_addr)
+            .collect();
+
+        async move {
+            let mut mutations_log_agg = HashMap::new();
+
+            for client in clients {
+                let mutations_log =
+                    client.send(MutationsLogQuery::INST).await??;
+
+                // Hashes are generated from contents of GraphMutations
+                // the probability of two hashes actually referring to
+                // different mutations is acceptably low.
+                mutations_log_agg.extend(mutations_log);
+            }
+
+            Ok(mutations_log_agg)
+        }
+        .interop_actor_boxed(self)
     }
 }

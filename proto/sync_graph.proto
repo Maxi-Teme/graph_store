@@ -8,6 +8,7 @@ service SyncGraph {
   rpc RemoveNode (RemoveNodeRequest) returns (ProcessResponse);
 
   rpc SyncRemotes (RemotesLogRequest) returns (RemotesLogResponse);
+  rpc SyncMutationsLog (MutationsLogRequest) returns (MutationsLogResponse);
 }
 
 message ProcessResponse {}
@@ -40,4 +41,10 @@ message RemotesLogRequest {
 message RemotesLogResponse {
   string from_server = 1;
   map<string, bool> remotes_log = 2;
+}
+
+message MutationsLogRequest {}
+
+message MutationsLogResponse {
+  bytes mutations_log = 1;
 }

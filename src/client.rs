@@ -6,15 +6,18 @@ use actix::{
     Actor, AsyncContext, Context, Handler, ResponseActFuture, WrapFuture,
 };
 
+use actix_interop::FutureInterop;
 use futures_util::TryFutureExt;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 
+use crate::mutations_log::MutationsLogQuery;
 use crate::sync_graph::sync_graph_client::SyncGraphClient;
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, RemotesLogRequest, RemoveEdgeRequest,
-    RemoveNodeRequest,
+    AddEdgeRequest, AddNodeRequest, MutationsLogRequest, MutationsLogResponse,
+    RemotesLogRequest, RemoveEdgeRequest, RemoveNodeRequest,
 };
+
 use crate::{
     GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphResponse,
     StoreError, SyncRemotesMessage,
@@ -70,53 +73,6 @@ where
             phantom_e: PhantomData,
             phantom_i: PhantomData,
         })
-    }
-}
-
-impl<N, E, I> Handler<SyncRemotesMessage> for GraphClient<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    type Result =
-        ResponseActFuture<Self, Result<HashMap<String, bool>, StoreError>>;
-
-    fn handle(
-        &mut self,
-        msg: SyncRemotesMessage,
-        _ctx: &mut Self::Context,
-    ) -> Self::Result {
-        let SyncRemotesMessage {
-            from,
-            flat_remotes_log,
-        } = msg;
-
-        let request = Request::new(RemotesLogRequest {
-            from_server: from,
-            remotes_log: flat_remotes_log,
-        });
-
-        let mut client = self.client.clone();
-
-        let future = Box::pin(async move {
-            match client.sync_remotes(request).await {
-                Ok(response) => {
-                    let response = response.into_inner();
-                    Ok(response.remotes_log)
-                }
-                Err(err) => {
-                    log::error!(
-                        "Error sending add_remote request. Error: '{err}'"
-                    );
-                    Err(StoreError::ClientError)
-                }
-            }
-        });
-
-        let actor_future = future.into_actor(self);
-
-        Box::pin(actor_future)
     }
 }
 
@@ -219,5 +175,97 @@ where
         ctx.spawn(actor_future);
 
         Ok(GraphResponse::Empty)
+    }
+}
+
+impl<N, E, I> Handler<SyncRemotesMessage> for GraphClient<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result =
+        ResponseActFuture<Self, Result<HashMap<String, bool>, StoreError>>;
+
+    fn handle(
+        &mut self,
+        msg: SyncRemotesMessage,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let SyncRemotesMessage {
+            from,
+            flat_remotes_log,
+        } = msg;
+
+        let request = Request::new(RemotesLogRequest {
+            from_server: from,
+            remotes_log: flat_remotes_log,
+        });
+
+        let mut client = self.client.clone();
+
+        let future = Box::pin(async move {
+            match client.sync_remotes(request).await {
+                Ok(response) => {
+                    let response = response.into_inner();
+                    Ok(response.remotes_log)
+                }
+                Err(err) => {
+                    log::error!(
+                        "Error sending add_remote request. Error: '{err}'"
+                    );
+                    Err(StoreError::ClientError)
+                }
+            }
+        });
+
+        let actor_future = future.into_actor(self);
+
+        Box::pin(actor_future)
+    }
+}
+
+impl<N, E, I> Handler<MutationsLogQuery<N, E, I>> for GraphClient<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = ResponseActFuture<
+        Self,
+        Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>,
+    >;
+
+    fn handle(
+        &mut self,
+        _msg: MutationsLogQuery<N, E, I>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let mut client = self.client.clone();
+
+        async move {
+            match client
+                .sync_mutations_log(Request::new(MutationsLogRequest {}))
+                .await
+            {
+                Ok(response) => {
+                    let MutationsLogResponse { mutations_log } =
+                        response.into_inner();
+
+                    let mutations_log = bincode::deserialize(&mutations_log)
+                        .map_err(|_err| StoreError::ParseError)?;
+
+                    Ok(mutations_log)
+                }
+                Err(err) => {
+                    log::error!(
+                        "Error getting MutationsLog from remote. Error: '{err:?}'",
+                    );
+
+                    Err(StoreError::ParseError)
+                },
+            }
+        }
+        .interop_actor_boxed(self)
     }
 }

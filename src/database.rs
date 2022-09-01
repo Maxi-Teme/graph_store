@@ -8,7 +8,7 @@ use petgraph::Directed;
 use url::Url;
 
 use crate::graph::Graph;
-use crate::mutations_log::MutationsLog;
+use crate::mutations_log::{InitializeMutationsLog, MutationsLog};
 use crate::remotes::{InitializeRemotes, Remotes};
 use crate::server::GraphServer;
 use crate::{
@@ -35,6 +35,7 @@ where
 {
     // constructors
     //
+
     pub async fn run(
         store_path: Option<String>,
         server_url: String,
@@ -93,6 +94,8 @@ Error: '{err}'"
             })
             .await??;
 
+        mutations_log.send(InitializeMutationsLog {}).await??;
+
         Ok(Self {
             graph,
             mutations_log,
@@ -103,6 +106,8 @@ Error: '{err}'"
     // public interface
     //
     // mutating queries
+    //
+
     pub async fn add_edge(
         &self,
         from: I,
@@ -175,7 +180,10 @@ Expected mutations_log to return Node."
         }
     }
 
-    // read only
+    //
+    // read only queries
+    //
+
     pub async fn get_graph(
         &self,
     ) -> Result<StableGraph<N, E, Directed>, StoreError> {

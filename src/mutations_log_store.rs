@@ -1,30 +1,14 @@
-use std::marker::PhantomData;
+use std::{collections::HashMap, marker::PhantomData};
 
 use actix::{Actor, Context, Handler, Message};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Error as SqliteError};
 
-use crate::{GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, StoreError};
+use crate::{
+    mutations_log::MutationsLogQuery, GraphEdge, GraphMutation, GraphNode,
+    GraphNodeIndex, StoreError,
+};
 
 const DEFAULT_GRAPH_LOG_PATH: &str = "data/graph_store/log";
-
-pub enum MutationsLogStoreMessage<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    Add(GraphMutation<N, E, I>),
-    Commit(GraphMutation<N, E, I>),
-}
-
-impl<N, E, I> Message for MutationsLogStoreMessage<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    type Result = Result<usize, StoreError>;
-}
 
 pub struct MutationsLogStore<N, E, I>
 where
@@ -83,6 +67,25 @@ where
     type Context = Context<Self>;
 }
 
+pub enum MutationsLogStoreMessage<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    Add(GraphMutation<N, E, I>),
+    Commit(GraphMutation<N, E, I>),
+}
+
+impl<N, E, I> Message for MutationsLogStoreMessage<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = Result<usize, StoreError>;
+}
+
 impl<N, E, I> Handler<MutationsLogStoreMessage<N, E, I>>
     for MutationsLogStore<N, E, I>
 where
@@ -136,5 +139,54 @@ where
                 }
             }
         }
+    }
+}
+
+impl<N, E, I> Handler<MutationsLogQuery<N, E, I>> for MutationsLogStore<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>;
+
+    fn handle(
+        &mut self,
+        _msg: MutationsLogQuery<N, E, I>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id, mutation FROM mutations_log")
+            .map_err(|err| StoreError::SqliteError(err.to_string()))?;
+
+        let mutations_log_iter = statement
+            .query_map([], |row| {
+                let hash: String = row.get(0)?;
+                let mutation: Vec<u8> = row.get(1)?;
+                let mutation: GraphMutation<N, E, I> = mutation
+                    .try_into()
+                    .map_err(|_| SqliteError::ExecuteReturnedResults)?;
+
+                Ok((hash, mutation))
+            })
+            .map_err(|err| StoreError::SqliteError(err.to_string()))?;
+
+        let mut mutations_log = HashMap::new();
+
+        for row in mutations_log_iter {
+            match row {
+                Ok(mutation_entry) => {
+                    mutations_log.insert(mutation_entry.0, mutation_entry.1);
+                }
+                Err(err) => log::error!(
+                    "Error while building MutationsLog \
+from sqlite file. Error: '{}'",
+                    err
+                ),
+            }
+        }
+
+        Ok(mutations_log)
     }
 }
