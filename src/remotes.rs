@@ -63,6 +63,10 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
+    // Amount of remote nodes with which to synchronize
+    // mutations before committing them.
+    // TODO: should be configurable as total or 
+    // as fraction of quantity of known remotes
     const SYNC_WITH_N: u8 = 2;
 
     pub fn new() -> Self {

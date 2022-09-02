@@ -57,7 +57,7 @@ where
         let store_filepath = Self::get_filepath(self.store_path.clone());
 
         let encoded = bincode::serialize(&data)
-            .map_err(|err| StoreError::FileSaveError(err.to_string()))?;
+            .map_err(|err| StoreError::Serde(err.to_string()))?;
 
         savefile::save_file(store_filepath, 0, &encoded)
             .map_err(|err| StoreError::FileSaveError(err.to_string()))?;
@@ -76,7 +76,7 @@ where
         }
 
         let loaded_bincode: Vec<u8> = savefile::load_file(store_filepath, 0)
-            .map_err(|err| StoreError::FileLoadError(err.to_string()))?;
+            .map_err(|err| StoreError::Serde(err.to_string()))?;
 
         let decoded = bincode::deserialize::<StableGraph<N, E, Directed>>(
             &loaded_bincode[..],

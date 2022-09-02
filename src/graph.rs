@@ -166,13 +166,16 @@ where
     //
 
     fn add_edge(&mut self, from: I, to: I, edge: E) -> Result<(), StoreError> {
-        let from_idx =
-            self.nodes_map.get(&from).ok_or(StoreError::NodeNotFound)?;
-        let to_idx = self.nodes_map.get(&to).ok_or(StoreError::NodeNotFound)?;
+        if let Ok(_) = self.get_edge(&from, &to) {
+            return Err(StoreError::ConflictDuplicateEdge);
+        };
+
+        let from_idx = self.get_node_index(&from)?;
+        let to_idx = self.get_node_index(&to)?;
 
         let mut graph = self.inner.clone();
 
-        graph.add_edge(*from_idx, *to_idx, edge);
+        graph.add_edge(from_idx, to_idx, edge);
 
         self.inner = self.store.save_to_file(graph)?;
 
@@ -214,7 +217,7 @@ where
 
                 Ok(node)
             }
-            Entry::Occupied(_) => Err(StoreError::ConflictDuplicateKey),
+            Entry::Occupied(_) => Err(StoreError::ConflictDuplicateNode),
         }
     }
 
@@ -536,7 +539,7 @@ mod tests {
 
         assert_eq!(
             graph.add_node(SimpleNodeWeightIndex(id), node),
-            Err(StoreError::ConflictDuplicateKey)
+            Err(StoreError::ConflictDuplicateNode)
         );
 
         if std::path::Path::new(test_dir).is_dir() {
@@ -606,7 +609,7 @@ mod tests {
             },
         );
 
-        assert_eq!(result, Err(StoreError::ConflictDuplicateKey));
+        assert_eq!(result, Err(StoreError::ConflictDuplicateNode));
 
         if std::path::Path::new(test_dir).is_dir() {
             std::fs::remove_dir_all(test_dir).unwrap();

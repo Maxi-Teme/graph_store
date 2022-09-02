@@ -2,36 +2,17 @@ syntax = "proto3";
 package sync_graph;
 
 service SyncGraph {
-  rpc AddEdge (AddEdgeRequest) returns (ProcessResponse);
-  rpc RemoveEdge (RemoveEdgeRequest) returns (ProcessResponse);
-  rpc AddNode (AddNodeRequest) returns (ProcessResponse);
-  rpc RemoveNode (RemoveNodeRequest) returns (ProcessResponse);
-
+  rpc GraphMutation (GraphMutationRequest) returns (GraphMutationResponse);
   rpc SyncRemotes (RemotesLogRequest) returns (RemotesLogResponse);
   rpc SyncMutationsLog (MutationsLogRequest) returns (MutationsLogResponse);
 }
 
-message ProcessResponse {}
 
-message AddEdgeRequest {
-  bytes from = 1;
-  bytes to = 2;
-  bytes edge = 3;
+message GraphMutationRequest {
+  bytes graph_mutation = 1;
 }
 
-message RemoveEdgeRequest {
-  bytes from = 1;
-  bytes to = 2;
-}
-
-message AddNodeRequest {
-  bytes key = 1;
-  bytes node = 2;
-}
-
-message RemoveNodeRequest {
-  bytes key = 1;
-}
+message GraphMutationResponse {}
 
 message RemotesLogRequest {
   string from_server = 1;

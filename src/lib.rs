@@ -22,6 +22,7 @@ pub(crate) use client::GraphClient;
 pub use database::GraphDatabase;
 pub(crate) use mutations_log::LogMessage;
 pub(crate) use remotes::{SendToNMessage, SyncRemotesMessage};
+use sync_graph::GraphMutationRequest;
 
 mod sync_graph {
     tonic::include_proto!("sync_graph");
@@ -102,6 +103,38 @@ where
     }
 }
 
+impl<N, E, I> TryFrom<GraphMutationRequest> for GraphMutation<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    type Error = StoreError;
+
+    fn try_from(request: GraphMutationRequest) -> Result<Self, Self::Error> {
+        let GraphMutationRequest { graph_mutation } = request;
+
+        bincode::deserialize(&graph_mutation)
+            .map_err(|err| StoreError::Serde(err.to_string()))
+    }
+}
+
+impl<N, E, I> TryInto<GraphMutationRequest> for GraphMutation<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    type Error = StoreError;
+
+    fn try_into(self) -> Result<GraphMutationRequest, Self::Error> {
+        let graph_mutation = bincode::serialize(&self)
+            .map_err(|err| StoreError::Serde(err.to_string()))?;
+
+        Ok(GraphMutationRequest { graph_mutation })
+    }
+}
+
 impl<N, E, I> Message for GraphMutation<N, E, I>
 where
     N: GraphNode + 'static,
@@ -164,6 +197,7 @@ where
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
 )]
 pub enum StoreError {
+    // graph
     GraphNotFound,
     EdgeNotFound,
     EdgeNotCreated,
@@ -171,20 +205,25 @@ pub enum StoreError {
     NodeNotFound,
     NodeNotCreated,
     NodeNotDeleted,
-    ConflictDuplicateKey,
-    ParseError,
+    ConflictDuplicateNode,
+    ConflictDuplicateEdge,
+    // store
+    StoreError,
     FileSaveError(String),
     FileLoadError(String),
     FileDecodeError(String),
-    PoisonError(String),
-    StoreError,
+    SqliteError(String),
+    WriteLogError(String),
+    // sync
     SyncError(String),
+    PoisonError(String),
+    MailboxError(String),
+    // rpc
     ClientSendError,
     ClientError,
-    MailboxError(String),
-    MutationError,
-    WriteLogError(String),
-    SqliteError(String),
+    // internal
+    ParseError,
+    Serde(String),
 }
 
 impl<T> From<PoisonError<T>> for StoreError {

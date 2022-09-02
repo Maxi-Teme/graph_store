@@ -2,10 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::marker::PhantomData;
 
-use actix::{
-    Actor, AsyncContext, Context, Handler, ResponseActFuture, WrapFuture,
-};
-
+use actix::{Actor, Context, Handler, ResponseActFuture};
 use actix_interop::FutureInterop;
 use futures_util::TryFutureExt;
 use tonic::transport::{Channel, Endpoint};
@@ -14,8 +11,8 @@ use tonic::Request;
 use crate::mutations_log::MutationsLogQuery;
 use crate::sync_graph::sync_graph_client::SyncGraphClient;
 use crate::sync_graph::{
-    AddEdgeRequest, AddNodeRequest, MutationsLogRequest, MutationsLogResponse,
-    RemotesLogRequest, RemoveEdgeRequest, RemoveNodeRequest,
+    GraphMutationRequest, MutationsLogRequest, MutationsLogResponse,
+    RemotesLogRequest,
 };
 
 use crate::{
@@ -82,99 +79,28 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<GraphResponse<N, E, I>, StoreError>;
+    type Result =
+        ResponseActFuture<Self, Result<GraphResponse<N, E, I>, StoreError>>;
 
     fn handle(
         &mut self,
         msg: GraphMutation<N, E, I>,
-        ctx: &mut Self::Context,
+        _ctx: &mut Self::Context,
     ) -> Self::Result {
         let mut client = self.client.clone();
 
-        let future = Box::pin(async move {
-            match msg {
-                GraphMutation::AddEdge((from, to, edge)) => {
-                    let (from, to, edge) = match (
-                        bincode::serialize(&from),
-                        bincode::serialize(&to),
-                        bincode::serialize(&edge),
-                    ) {
-                        (Ok(from), Ok(to), Ok(edge)) => (from, to, edge),
-                        _ => {
-                            return log::error!(
-                            "Error while serializing 'AddEdgeRequest' query."
-                        )
-                        }
-                    };
+        async move {
+            let request: GraphMutationRequest = msg.try_into()?;
 
-                    let request =
-                        Request::new(AddEdgeRequest { from, to, edge });
-                    if let Err(err) = client.add_edge(request).await {
-                        log::error!(
-                            "Error while sending 'AddEdgeRequest' request. Error: {err}"
-                        );
-                    };
-                }
-                GraphMutation::RemoveEdge((from, to)) => {
-                    let (from, to) = match (
-                        bincode::serialize(&from),
-                        bincode::serialize(&to),
-                    ) {
-                        (Ok(from), Ok(to)) => (from, to),
-                        _ => {
-                            return log::error!(
-                                "Error while serializing 'RemoveEdge' query."
-                            )
-                        }
-                    };
+            if let Err(err) = client.graph_mutation(request).await {
+                log::error!(
+                    "Error while sending 'AddEdgeRequest' request. Error: {err}"
+                );
+            };
 
-                    let request = Request::new(RemoveEdgeRequest { from, to });
-                    if let Err(err) = client.remove_edge(request).await {
-                        log::error!("Error while sending 'RemoveEdge' request. Error: {err}");
-                    };
-                }
-                GraphMutation::AddNode((key, node)) => {
-                    let (key, node) = match (
-                        bincode::serialize(&key),
-                        bincode::serialize(&node),
-                    ) {
-                        (Ok(key), Ok(node)) => (key, node),
-                        _ => {
-                            return log::error!(
-                                "Error while serializing 'AddNode' query."
-                            )
-                        }
-                    };
-
-                    let request = Request::new(AddNodeRequest { key, node });
-                    if let Err(err) = client.add_node(request).await {
-                        log::error!(
-                            "Error while sending 'AddNode' request. Error: {err}"
-                        );
-                    };
-                }
-                GraphMutation::RemoveNode(key) => {
-                    let key = match bincode::serialize(&key) {
-                        Ok(key) => key,
-                        Err(err) => {
-                            return log::error!(
-                                "Error while serializing 'AddNode' query. Error: {err}"
-                            )
-                        },
-                    };
-
-                    let request = Request::new(RemoveNodeRequest { key });
-                    if let Err(err) = client.remove_node(request).await {
-                        log::error!("Error while sending 'remove_node' request. Error: {err}");
-                    };
-                }
-            }
-        });
-
-        let actor_future = future.into_actor(self);
-        ctx.spawn(actor_future);
-
-        Ok(GraphResponse::Empty)
+            Ok(GraphResponse::Empty)
+        }
+        .interop_actor_boxed(self)
     }
 }
 
@@ -204,7 +130,7 @@ where
 
         let mut client = self.client.clone();
 
-        let future = Box::pin(async move {
+        async move {
             match client.sync_remotes(request).await {
                 Ok(response) => {
                     let response = response.into_inner();
@@ -217,11 +143,8 @@ where
                     Err(StoreError::ClientError)
                 }
             }
-        });
-
-        let actor_future = future.into_actor(self);
-
-        Box::pin(actor_future)
+        }
+        .interop_actor_boxed(self)
     }
 }
 

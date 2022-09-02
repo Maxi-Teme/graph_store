@@ -48,10 +48,10 @@ where
     fn init_log_table(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS mutations_log (
-            id CHAR(32) PRIMARY KEY NOT NULL UNIQUE,
-            mutation BLOB NOT NULL,
-            committed BOOLEAN NOT NULL
-        )",
+                id CHAR(32) PRIMARY KEY NOT NULL UNIQUE,
+                mutation BLOB NOT NULL,
+                committed BOOLEAN NOT NULL
+            )",
             (),
         )?;
         Ok(())
@@ -105,38 +105,27 @@ where
                 let hash = graph_mutation.get_hash();
                 let mutation: Vec<u8> = graph_mutation.try_into()?;
 
-                match self.conn.execute(
-                    "INSERT INTO mutations_log (id, mutation, committed)
-                        VALUES (?1, ?2, ?3)",
-                    params![hash, mutation, false],
-                ) {
-                    Ok(n) => Ok(n),
-                    Err(err) => {
-                        log::error!(
-                            "[MutationsLogStore.handle<Add>] Error: {}",
-                            err
-                        );
-                        Err(StoreError::WriteLogError(err.to_string()))
-                    }
-                }
+                self.conn
+                    .execute(
+                        "INSERT INTO mutations_log (id, mutation, committed)
+                            VALUES (?1, ?2, ?3)",
+                        params![hash, mutation, false],
+                    )
+                    .map_err(|err| StoreError::WriteLogError(err.to_string()))
             }
             MutationsLogStoreMessage::Commit(graph_mutation) => {
                 let hash = graph_mutation.get_hash();
                 let mutation: Vec<u8> = graph_mutation.try_into()?;
 
-                match self.conn.execute(
-                    "INSERT INTO mutations_log (id, mutation, committed)
-                        VALUES (?1, ?2, ?3)
-                     ON CONFLICT(id) DO UPDATE SET committed = true
-                        WHERE id = ?1",
-                    params![hash, mutation, true],
-                ) {
-                    Ok(n) => Ok(n),
-                    Err(err) => {
-                        log::error!("Error: {}", err);
-                        Err(StoreError::WriteLogError(err.to_string()))
-                    }
-                }
+                self.conn
+                    .execute(
+                        "INSERT INTO mutations_log (id, mutation, committed)
+                            VALUES (?1, ?2, ?3)
+                        ON CONFLICT(id) DO UPDATE SET committed = true
+                            WHERE id = ?1",
+                        params![hash, mutation, true],
+                    )
+                    .map_err(|err| StoreError::WriteLogError(err.to_string()))
             }
         }
     }
@@ -157,8 +146,7 @@ where
     ) -> Self::Result {
         let mut statement = self
             .conn
-            .prepare("SELECT id, mutation FROM mutations_log")
-            .map_err(|err| StoreError::SqliteError(err.to_string()))?;
+            .prepare("SELECT id, mutation FROM mutations_log")?;
 
         let mutations_log_iter = statement
             .query_map([], |row| {

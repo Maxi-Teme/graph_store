@@ -16,6 +16,7 @@ use graph_db::{GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex};
     Deserialize,
 )]
 pub struct EdgeType(usize);
+
 impl GraphEdge for EdgeType {}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -30,7 +31,9 @@ impl GraphNode for NodeTypes {}
     Debug, Clone, Default, Hash, PartialEq, Eq, Serialize, Deserialize,
 )]
 pub struct NodeKey(usize);
+
 impl GraphNodeIndex for NodeKey {}
+
 impl From<NodeTypes> for NodeKey {
     fn from(node: NodeTypes) -> Self {
         Self(node.id)
