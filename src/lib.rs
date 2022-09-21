@@ -153,7 +153,7 @@ where
 {
     GetGraph,
     FilterGraph((Option<Vec<N>>, Option<Vec<E>>)),
-    RetainNodes(Vec<&'static I>),
+    RetainNodes(Vec<I>),
     GetNeighbors(&'static I),
     GetEdge((&'static I, &'static I)),
     GetEdges,

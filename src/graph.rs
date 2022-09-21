@@ -290,7 +290,7 @@ where
 
     fn retain_nodes(
         &self,
-        nodes_to_retain: Vec<&I>,
+        nodes_to_retain: Vec<I>,
     ) -> Result<StableGraph<N, E, Directed>, StoreError> {
         let mut retained = self.inner.clone(); // could become expensive
 
@@ -371,7 +371,7 @@ where
 
     fn get_node_indices(
         &self,
-        keys: Vec<&I>,
+        keys: Vec<I>,
     ) -> Result<Vec<&NodeIndex>, StoreError> {
         Ok(keys.iter().filter_map(|k| self.nodes_map.get(k)).collect())
     }

@@ -220,7 +220,7 @@ Expected mutations_log to return Graph."
 
     pub async fn retain_nodes(
         &self,
-        nodes_to_retain: Vec<&'static I>,
+        nodes_to_retain: Vec<I>,
     ) -> Result<StableGraph<N, E, Directed>, StoreError> {
         let query = GraphQuery::RetainNodes(nodes_to_retain);
 
