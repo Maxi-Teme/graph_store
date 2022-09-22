@@ -99,11 +99,11 @@ where
                 Ok(GraphResponse::Graph(graph))
             }
             GraphQuery::GetNeighbors(key) => {
-                let nodes = self.get_neighbors(key)?;
+                let nodes = self.get_neighbors(&key)?;
                 Ok(GraphResponse::Nodes(nodes))
             }
             GraphQuery::GetEdge((from, to)) => {
-                let edge = self.get_edge(from, to)?;
+                let edge = self.get_edge(&from, &to)?;
                 Ok(GraphResponse::Edge(edge))
             }
             GraphQuery::GetEdges => {
@@ -111,11 +111,11 @@ where
                 Ok(GraphResponse::Edges(edges))
             }
             GraphQuery::HasNode(key) => {
-                let has = self.has_node(key)?;
+                let has = self.has_node(&key)?;
                 Ok(GraphResponse::Bool(has))
             }
             GraphQuery::GetNode(key) => {
-                let node = self.get_node(key)?;
+                let node = self.get_node(&key)?;
                 Ok(GraphResponse::Node(node))
             }
             GraphQuery::GetNodes => {
@@ -123,7 +123,7 @@ where
                 Ok(GraphResponse::Nodes(nodes))
             }
             GraphQuery::GetNodeIndex(key) => {
-                let node_index = self.get_node_index(key)?;
+                let node_index = self.get_node_index(&key)?;
                 Ok(GraphResponse::NodeIndex(node_index))
             }
             GraphQuery::GetSourceNodes => {

@@ -233,7 +233,7 @@ Expected mutations_log to return Graph."
 
     pub async fn get_neighbors(
         &self,
-        key: &'static I,
+        key: I,
     ) -> Result<Vec<N>, StoreError> {
         let query = GraphQuery::GetNeighbors(key);
 
@@ -246,8 +246,8 @@ Expected mutations_log to return Graph."
 
     pub async fn get_edge(
         &self,
-        from: &'static I,
-        to: &'static I,
+        from: I,
+        to: I,
     ) -> Result<E, StoreError> {
         let query = GraphQuery::GetEdge((from, to));
 
@@ -268,7 +268,7 @@ Expected mutations_log to return Graph."
         }
     }
 
-    pub async fn has_node(&self, key: &'static I) -> Result<bool, StoreError> {
+    pub async fn has_node(&self, key: I) -> Result<bool, StoreError> {
         let query = GraphQuery::HasNode(key);
 
         if let GraphResponse::Bool(has) = self.graph.send(query).await?? {
@@ -278,7 +278,7 @@ Expected mutations_log to return Graph."
         }
     }
 
-    pub async fn get_node(&self, key: &'static I) -> Result<N, StoreError> {
+    pub async fn get_node(&self, key: I) -> Result<N, StoreError> {
         let query = GraphQuery::GetNode(key);
 
         if let GraphResponse::Node(node) = self.graph.send(query).await?? {
@@ -300,7 +300,7 @@ Expected mutations_log to return Graph."
 
     pub async fn get_node_index(
         &self,
-        key: &'static I,
+        key: I,
     ) -> Result<NodeIndex, StoreError> {
         let query = GraphQuery::GetNodeIndex(key);
 
