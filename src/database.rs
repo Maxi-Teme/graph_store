@@ -12,8 +12,8 @@ use crate::mutations_log::{InitializeMutationsLog, MutationsLog};
 use crate::remotes::{InitializeRemotes, Remotes};
 use crate::server::GraphServer;
 use crate::{
-    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphQuery,
-    GraphResponse, LogMessage, StoreError,
+    DatabaseConfig, GraphEdge, GraphMutation, GraphNode, GraphNodeIndex,
+    GraphQuery, GraphResponse, StoreError,
 };
 
 #[derive(Debug)]
@@ -36,25 +36,22 @@ where
     // constructors
     //
 
-    pub async fn run(
-        store_path: Option<String>,
-        server_url: String,
-        initial_remote_addresses: Vec<String>,
-    ) -> Result<Self, StoreError> {
-        let graph = Graph::<N, E, I>::new(store_path.clone())?.start();
+    pub async fn run(config: DatabaseConfig) -> Result<Self, StoreError> {
+        let graph = Graph::<N, E, I>::new(config.store_path.clone())?.start();
 
         let remotes = Remotes::new().start();
 
         let mutations_log = MutationsLog::new(
+            config.node_id,
             graph.clone(),
             remotes.clone(),
-            store_path.clone(),
+            config.store_path.clone(),
         )
         .await
         .unwrap()
         .start();
 
-        let server_address = match Url::parse(&server_url) {
+        let server_address = match Url::parse(&config.server_url) {
             Ok(url) => match (url.host_str(), url.port()) {
                 (Some(host), Some(port)) => format!("{}:{}", host, port),
                 _ => return Err(StoreError::ParseError),
@@ -89,8 +86,8 @@ Error: '{err}'"
 
         remotes
             .send(InitializeRemotes {
-                initial_addresses: initial_remote_addresses,
-                server_address: server_url,
+                initial_addresses: config.initial_remote_addresses,
+                server_address: config.server_url,
             })
             .await??;
 
@@ -116,9 +113,7 @@ Error: '{err}'"
     ) -> Result<(), StoreError> {
         let query = GraphMutation::AddEdge((from, to, edge));
 
-        self.mutations_log
-            .send(LogMessage::Replicated(query))
-            .await??;
+        self.mutations_log.send(query).await??;
 
         Ok(())
     }
@@ -126,10 +121,8 @@ Error: '{err}'"
     pub async fn remove_edge(&self, from: I, to: I) -> Result<E, StoreError> {
         let query = GraphMutation::RemoveEdge((from, to));
 
-        if let GraphResponse::Edge(edge) = self
-            .mutations_log
-            .send(LogMessage::Replicated(query))
-            .await??
+        if let GraphResponse::Edge(edge) =
+            self.mutations_log.send(query).await??
         {
             Ok(edge)
         } else {
@@ -144,10 +137,7 @@ Expected mutations_log to return Edge."
     pub async fn add_node(&self, key: I, node: N) -> Result<N, StoreError> {
         let query = GraphMutation::AddNode((key, node));
 
-        let result = self
-            .mutations_log
-            .send(LogMessage::Replicated(query))
-            .await??;
+        let result = self.mutations_log.send(query).await??;
 
         match result {
             GraphResponse::Node(node) => Ok(node),
@@ -165,10 +155,8 @@ Expected mutations_log to return Node got {:?}",
     pub async fn remove_node(&self, key: I) -> Result<N, StoreError> {
         let query = GraphMutation::RemoveNode(key);
 
-        if let GraphResponse::Node(node) = self
-            .mutations_log
-            .send(LogMessage::Replicated(query))
-            .await??
+        if let GraphResponse::Node(node) =
+            self.mutations_log.send(query).await??
         {
             Ok(node)
         } else {
@@ -231,10 +219,7 @@ Expected mutations_log to return Graph."
         }
     }
 
-    pub async fn get_neighbors(
-        &self,
-        key: I,
-    ) -> Result<Vec<N>, StoreError> {
+    pub async fn get_neighbors(&self, key: I) -> Result<Vec<N>, StoreError> {
         let query = GraphQuery::GetNeighbors(key);
 
         if let GraphResponse::Nodes(nodes) = self.graph.send(query).await?? {
@@ -244,11 +229,7 @@ Expected mutations_log to return Graph."
         }
     }
 
-    pub async fn get_edge(
-        &self,
-        from: I,
-        to: I,
-    ) -> Result<E, StoreError> {
+    pub async fn get_edge(&self, from: I, to: I) -> Result<E, StoreError> {
         let query = GraphQuery::GetEdge((from, to));
 
         if let GraphResponse::Edge(edge) = self.graph.send(query).await?? {

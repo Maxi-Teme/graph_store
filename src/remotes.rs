@@ -8,12 +8,14 @@ use actix_interop::FutureInterop;
 use rand::seq::SliceRandom;
 
 use crate::{
-    mutations_log::MutationsLogQuery, GraphClient, GraphEdge, GraphMutation,
-    GraphNode, GraphNodeIndex, GraphResponse, StoreError,
+    mutations_log::{MutationsLogMutation, MutationsLogQuery},
+    GraphClient, GraphEdge, GraphMutation, GraphNode, GraphNodeIndex,
+    GraphResponse, StoreError,
 };
 
 pub struct SyncRemotesMessage {
     pub from: String,
+    /// HashMap<[address], [is_active]>
     pub flat_remotes_log: HashMap<String, bool>,
 }
 
@@ -21,20 +23,20 @@ impl Message for SyncRemotesMessage {
     type Result = Result<HashMap<String, bool>, StoreError>;
 }
 
-pub struct SendToNMessage<N, E, I>(pub GraphMutation<N, E, I>)
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static;
+// pub struct SendToNMessage<N, E, I>(pub GraphMutation<N, E, I>)
+// where
+//     N: GraphNode + 'static,
+//     E: GraphEdge + 'static,
+//     I: GraphNodeIndex + From<N> + 'static;
 
-impl<N, E, I> Message for SendToNMessage<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    type Result = Result<(), StoreError>;
-}
+// impl<N, E, I> Message for SendToNMessage<N, E, I>
+// where
+//     N: GraphNode + 'static,
+//     E: GraphEdge + 'static,
+//     I: GraphNodeIndex + From<N> + 'static,
+// {
+//     type Result = Result<(), StoreError>;
+// }
 
 #[derive(Debug, Clone)]
 struct RemotesEntry<N, E, I>
@@ -65,7 +67,7 @@ where
 {
     // Amount of remote nodes with which to synchronize
     // mutations before committing them.
-    // TODO: should be configurable as total or 
+    // TODO: should be configurable as total or
     // as fraction of quantity of known remotes
     const SYNC_WITH_N: u8 = 2;
 
@@ -116,7 +118,7 @@ where
     }
 }
 
-impl<N, E, I> Handler<SendToNMessage<N, E, I>> for Remotes<N, E, I>
+impl<N, E, I> Handler<MutationsLogMutation<N, E, I>> for Remotes<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
@@ -127,10 +129,10 @@ where
 
     fn handle(
         &mut self,
-        msg: SendToNMessage<N, E, I>,
+        msg: MutationsLogMutation<N, E, I>,
         _: &mut Self::Context,
     ) -> Self::Result {
-        let graph_mutation = msg.0;
+        let graph_mutation = msg.mutation;
 
         let mut rng = rand::thread_rng();
         let random_remotes: Vec<Addr<_>> = self
@@ -330,7 +332,7 @@ where
 {
     type Result = ResponseActFuture<
         Self,
-        Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>,
+        Result<Vec<MutationsLogMutation<N, E, I>>, StoreError>,
     >;
 
     fn handle(
@@ -346,18 +348,20 @@ where
             .collect();
 
         async move {
-            let mut mutations_log_agg = HashMap::new();
+            let mut mutations_log_agg = Vec::new();
 
             for client in clients {
                 let mutations_log =
-                    client.send(MutationsLogQuery::INST).await??;
+                    client.send(MutationsLogQuery::full()).await??;
 
                 // Hashes are generated from contents of GraphMutations
                 // the probability of two hashes actually referring to
                 // different mutations is acceptably low.
-                mutations_log_agg.extend(mutations_log);
+                mutations_log_agg.append(&mut mutations_log);
             }
 
+            mutations_log_agg.sort_by(|a, b| a.hash.cmp(&b.hash));
+            mutations_log_agg.dedup_by(|a, b| a.hash == b.hash);
             Ok(mutations_log_agg)
         }
         .interop_actor_boxed(self)

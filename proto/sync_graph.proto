@@ -9,7 +9,8 @@ service SyncGraph {
 
 
 message GraphMutationRequest {
-  bytes graph_mutation = 1;
+  string hash = 1;
+  bytes graph_mutation = 2;
 }
 
 message GraphMutationResponse {}

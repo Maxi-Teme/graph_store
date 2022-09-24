@@ -1,11 +1,11 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use actix::{Actor, Context, Handler, Message};
+use actix::{Actor, Context, Handler};
 use rusqlite::{params, Connection, Error as SqliteError};
 
 use crate::{
-    mutations_log::MutationsLogQuery, GraphEdge, GraphMutation, GraphNode,
-    GraphNodeIndex, StoreError,
+    mutations_log::{MutationsLogMutation, MutationsLogQuery},
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, StoreError,
 };
 
 const DEFAULT_GRAPH_LOG_PATH: &str = "data/graph_store/log";
@@ -48,9 +48,8 @@ where
     fn init_log_table(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS mutations_log (
-                id CHAR(32) PRIMARY KEY NOT NULL UNIQUE,
-                mutation BLOB NOT NULL,
-                committed BOOLEAN NOT NULL
+                id CHAR(40) PRIMARY KEY NOT NULL UNIQUE,
+                mutation BLOB NOT NULL
             )",
             (),
         )?;
@@ -67,26 +66,7 @@ where
     type Context = Context<Self>;
 }
 
-pub enum MutationsLogStoreMessage<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    Add(GraphMutation<N, E, I>),
-    Commit(GraphMutation<N, E, I>),
-}
-
-impl<N, E, I> Message for MutationsLogStoreMessage<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    type Result = Result<usize, StoreError>;
-}
-
-impl<N, E, I> Handler<MutationsLogStoreMessage<N, E, I>>
+impl<N, E, I> Handler<MutationsLogMutation<N, E, I>>
     for MutationsLogStore<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
@@ -97,37 +77,18 @@ where
 
     fn handle(
         &mut self,
-        msg: MutationsLogStoreMessage<N, E, I>,
+        msg: MutationsLogMutation<N, E, I>,
         _ctx: &mut Self::Context,
     ) -> Self::Result {
-        match msg {
-            MutationsLogStoreMessage::Add(graph_mutation) => {
-                let hash = graph_mutation.get_hash();
-                let mutation: Vec<u8> = graph_mutation.try_into()?;
+        let mutation: Vec<u8> = msg.mutation.try_into()?;
 
-                self.conn
-                    .execute(
-                        "INSERT INTO mutations_log (id, mutation, committed)
-                            VALUES (?1, ?2, ?3)",
-                        params![hash, mutation, false],
-                    )
-                    .map_err(|err| StoreError::WriteLogError(err.to_string()))
-            }
-            MutationsLogStoreMessage::Commit(graph_mutation) => {
-                let hash = graph_mutation.get_hash();
-                let mutation: Vec<u8> = graph_mutation.try_into()?;
-
-                self.conn
-                    .execute(
-                        "INSERT INTO mutations_log (id, mutation, committed)
-                            VALUES (?1, ?2, ?3)
-                        ON CONFLICT(id) DO UPDATE SET committed = true
-                            WHERE id = ?1",
-                        params![hash, mutation, true],
-                    )
-                    .map_err(|err| StoreError::WriteLogError(err.to_string()))
-            }
-        }
+        self.conn
+            .execute(
+                "INSERT INTO mutations_log (id, mutation)
+                            VALUES (?1, ?2)",
+                params![msg.hash, mutation],
+            )
+            .map_err(|err| StoreError::WriteLogError(err.to_string()))
     }
 }
 

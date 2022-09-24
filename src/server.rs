@@ -6,7 +6,7 @@ use actix::Addr;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use crate::mutations_log::{MutationsLog, MutationsLogQuery};
+use crate::mutations_log::{MutationsLog, MutationsLogQuery, MutationsLogMutation};
 use crate::remotes::Remotes;
 use crate::sync_graph::sync_graph_server::{SyncGraph, SyncGraphServer};
 use crate::sync_graph::{
@@ -14,8 +14,8 @@ use crate::sync_graph::{
     MutationsLogResponse, RemotesLogRequest, RemotesLogResponse,
 };
 use crate::{
-    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, LogMessage,
-    StoreError, SyncRemotesMessage,
+    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, StoreError,
+    SyncRemotesMessage,
 };
 
 #[derive(Debug)]
@@ -105,7 +105,7 @@ where
         &self,
         _request: Request<MutationsLogRequest>,
     ) -> Result<Response<MutationsLogResponse>, Status> {
-        match self.mutations_log.send(MutationsLogQuery::INST).await {
+        match self.mutations_log.send(MutationsLogQuery::full()).await {
             Ok(inner) => match inner {
                 Ok(mutations_log) => {
                     let mutations_log: Vec<u8> =
@@ -136,14 +136,14 @@ where
         &self,
         request: Request<GraphMutationRequest>,
     ) -> Result<Response<GraphMutationResponse>, Status> {
-        let graph_mutation: GraphMutation<N, E, I> = request
+        let graph_mutation_log_entry: MutationsLogMutation<N, E, I> = request
             .into_inner()
             .try_into()
             .map_err(|err: StoreError| Status::internal(err.to_string()))?;
 
         match self
             .mutations_log
-            .send(LogMessage::Commit(graph_mutation))
+            .send(graph_mutation_log_entry)
             .await
         {
             Ok(inner) => match inner {
