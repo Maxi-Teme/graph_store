@@ -7,11 +7,9 @@ const TOTAL_NODES: usize = 3;
 
 #[actix_rt::test]
 async fn test_initial_data_synchronization() {
-    env_logger::init();
+    let root_test_path = "test-data/test_initial_data_synchronization";
 
-    let root_test_path = "test-data/test_two_nodes_ok";
-
-    let test_dir1 = "test-data/test_two_nodes_ok/node1";
+    let test_dir1 = "test-data/test_initial_data_synchronization/node1";
     let database1 = common::setup(test_dir1, 4000, vec![]).await;
 
     let first_node_id = Uuid::new_v4();
@@ -34,7 +32,7 @@ async fn test_initial_data_synchronization() {
 
     let (thread2_tx, thread2_rx) = tokio::sync::oneshot::channel();
     let thread2 = actix_rt::spawn(async move {
-        let test_dir2 = "test-data/test_two_nodes_ok/node2";
+        let test_dir2 = "test-data/test_initial_data_synchronization/node2";
         let initial_remotes2 = vec!["http://127.0.0.1:4000".to_string()];
         let database2 = common::setup(test_dir2, 4001, initial_remotes2).await;
 

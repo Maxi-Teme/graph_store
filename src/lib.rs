@@ -2,11 +2,10 @@ use std::env;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::PoisonError;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix::{MailboxError, Message};
 
-use rand::distributions::Alphanumeric;
-use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use petgraph::stable_graph::{NodeIndex, StableGraph};
@@ -72,8 +71,13 @@ where
     E: GraphEdge + 'static,
     I: GraphNodeIndex + From<N> + 'static,
 {
-    pub(crate) fn get_hash(&self, node_id: String) -> String {
-        format!("{node_id}{:x}", md5::compute(format!("{:?}", self)))
+    pub(crate) fn get_hash(&self) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Now should be after UNIX EPOCH")
+            .as_nanos();
+
+        format!("{}{:x}", now, md5::compute(format!("{:?}", self)))
     }
 }
 
@@ -224,7 +228,6 @@ impl ToString for StoreError {
 pub struct DatabaseConfig {
     server_url: String,
     initial_remote_addresses: Vec<String>,
-    node_id: String,
     store_path: Option<String>,
     sync_with_remotes: usize,
 }
@@ -254,22 +257,6 @@ of AGRAPHSTORE_INITIAL_REMOTE_URLS is not a valid URL.",
             }
 
             config.initial_remote_addresses = addresses;
-        }
-
-        if let Ok(node_id) = env::var("AGRAPHSTORE_NODE_ID") {
-            if node_id.len() != 8 {
-                panic!(
-                    "Configuration error provided AGRAPHSTORE_NODE_ID \
-is not exactly 8 charackters long."
-                );
-            }
-            config.node_id = node_id;
-        } else {
-            config.node_id = rand::thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(8)
-                .map(char::from)
-                .collect();
         }
 
         if let Ok(store_path) = env::var("AGRAPHSTORE_PATH") {
@@ -314,16 +301,6 @@ of `initial_remote_addresses` is not a valid URL.",
     pub fn set_store_path(&mut self, store_path: String) {
         self.store_path = Some(store_path);
     }
-
-    pub fn set_node_id(&mut self, node_id: String) {
-        if node_id.len() != 8 {
-            panic!(
-                "Configuration error provided `node_id` \
-is not exactly 8 charackters long."
-            );
-        }
-        self.node_id = node_id;
-    }
 }
 
 impl Default for DatabaseConfig {
@@ -331,7 +308,6 @@ impl Default for DatabaseConfig {
         Self {
             server_url: String::default(),
             initial_remote_addresses: Vec::default(),
-            node_id: String::default(),
             store_path: Option::default(),
             sync_with_remotes: 2,
         }

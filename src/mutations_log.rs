@@ -25,7 +25,6 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    node_id: String,
     graph: Addr<Graph<N, E, I>>,
     remotes: Addr<Remotes<N, E, I>>,
     mutations_log_store: Addr<MutationsLogStore<N, E, I>>,
@@ -51,7 +50,6 @@ where
     // constuctor
 
     pub async fn new(
-        node_id: String,
         graph: Addr<Graph<N, E, I>>,
         remotes: Addr<Remotes<N, E, I>>,
         store_path: Option<String>,
@@ -60,7 +58,6 @@ where
         let pending_mutations_log = HashMap::new();
 
         Ok(Self {
-            node_id,
             graph,
             remotes,
             mutations_log_store,
@@ -98,11 +95,10 @@ where
         let remotes = self.remotes.clone();
         let graph = self.graph.clone();
         let mutations_log_store = self.mutations_log_store.clone();
-        let node_id = self.node_id.clone();
         let mut pending_mutations_log = self.pending_mutations_log.clone();
 
         async move {
-            let hash = msg.get_hash(node_id.clone());
+            let hash = msg.get_hash();
             pending_mutations_log.insert(hash.clone(), msg.clone());
 
             let query = MutationsLogMutation {

@@ -42,7 +42,6 @@ where
         let remotes = Remotes::new(config.sync_with_remotes).start();
 
         let mutations_log = MutationsLog::new(
-            config.node_id,
             graph.clone(),
             remotes.clone(),
             config.store_path.clone(),
