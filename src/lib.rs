@@ -1,9 +1,12 @@
+use std::env;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::PoisonError;
 
 use actix::{MailboxError, Message};
 
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use petgraph::stable_graph::{NodeIndex, StableGraph};
@@ -20,9 +23,8 @@ mod server;
 
 pub(crate) use client::GraphClient;
 pub use database::GraphDatabase;
-pub(crate) use mutations_log::LogMessage;
-pub(crate) use remotes::{SendToNMessage, SyncRemotesMessage};
-use sync_graph::GraphMutationRequest;
+pub(crate) use remotes::SyncRemotesMessage;
+use url::Url;
 
 mod sync_graph {
     tonic::include_proto!("sync_graph");
@@ -70,8 +72,8 @@ where
     E: GraphEdge + 'static,
     I: GraphNodeIndex + From<N> + 'static,
 {
-    pub fn get_hash(&self) -> String {
-        format!("{:x}", md5::compute(format!("{:?}", self)))
+    pub(crate) fn get_hash(&self, node_id: String) -> String {
+        format!("{node_id}{:x}", md5::compute(format!("{:?}", self)))
     }
 }
 
@@ -100,38 +102,6 @@ where
     fn try_into(self) -> Result<Vec<u8>, Self::Error> {
         bincode::serialize(&self)
             .map_err(|_| StoreError::WriteLogError("".to_string()))
-    }
-}
-
-impl<N, E, I> TryFrom<GraphMutationRequest> for GraphMutation<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    type Error = StoreError;
-
-    fn try_from(request: GraphMutationRequest) -> Result<Self, Self::Error> {
-        let GraphMutationRequest { graph_mutation } = request;
-
-        bincode::deserialize(&graph_mutation)
-            .map_err(|err| StoreError::Serde(err.to_string()))
-    }
-}
-
-impl<N, E, I> TryInto<GraphMutationRequest> for GraphMutation<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    type Error = StoreError;
-
-    fn try_into(self) -> Result<GraphMutationRequest, Self::Error> {
-        let graph_mutation = bincode::serialize(&self)
-            .map_err(|err| StoreError::Serde(err.to_string()))?;
-
-        Ok(GraphMutationRequest { graph_mutation })
     }
 }
 
@@ -247,5 +217,123 @@ impl From<rusqlite::Error> for StoreError {
 impl ToString for StoreError {
     fn to_string(&self) -> String {
         format!("{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    server_url: String,
+    initial_remote_addresses: Vec<String>,
+    node_id: String,
+    store_path: Option<String>,
+    sync_with_remotes: usize,
+}
+
+impl DatabaseConfig {
+    pub fn init() -> Self {
+        let mut config = Self::default();
+
+        if let Ok(server_url) = env::var("AGRAPHSTORE_SERVER_URL") {
+            Url::parse(&server_url).expect(
+                "Configuration error provided AGRAPHSTORE_SERVER_URL \
+is not a valid URL.",
+            );
+            config.server_url = server_url;
+        }
+
+        if let Ok(initial_remotes) = env::var("AGRAPHSTORE_INITIAL_REMOTE_URLS")
+        {
+            let addresses: Vec<String> =
+                initial_remotes.split(',').map(String::from).collect();
+            for address in addresses.clone().iter() {
+                Url::parse(&address).expect(&format!(
+                    "Configuration error provided url {} \
+of AGRAPHSTORE_INITIAL_REMOTE_URLS is not a valid URL.",
+                    address,
+                ));
+            }
+
+            config.initial_remote_addresses = addresses;
+        }
+
+        if let Ok(node_id) = env::var("AGRAPHSTORE_NODE_ID") {
+            if node_id.len() != 8 {
+                panic!(
+                    "Configuration error provided AGRAPHSTORE_NODE_ID \
+is not exactly 8 charackters long."
+                );
+            }
+            config.node_id = node_id;
+        } else {
+            config.node_id = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(8)
+                .map(char::from)
+                .collect();
+        }
+
+        if let Ok(store_path) = env::var("AGRAPHSTORE_PATH") {
+            config.store_path = Some(store_path);
+        }
+
+        if let Ok(sync_with_remotes) =
+            env::var("AGRAPHSTORE_SYNCH_WITH_REMOTES_N")
+        {
+            let sync_with_remotes: usize = sync_with_remotes.parse().expect(
+                "Configuration error provided AGRAPHSTORE_SYNCH_WITH_REMOTES_N \
+is not exactly 8 charackters long."
+            );
+            config.sync_with_remotes = sync_with_remotes;
+        }
+
+        config
+    }
+
+    pub fn set_server_url(&mut self, server_url: String) {
+        Url::parse(&server_url).expect(
+            "Configuration error provided `server_url` \
+is not a valid URL.",
+        );
+        self.server_url = server_url;
+    }
+
+    pub fn set_initial_remote_addresses(
+        &mut self,
+        initial_remote_addresses: Vec<String>,
+    ) {
+        for address in initial_remote_addresses.clone().iter() {
+            Url::parse(&address).expect(&format!(
+                "Configuration error provided url {} \
+of `initial_remote_addresses` is not a valid URL.",
+                address,
+            ));
+        }
+        self.initial_remote_addresses = initial_remote_addresses;
+    }
+
+    pub fn set_store_path(&mut self, store_path: String) {
+        self.store_path = Some(store_path);
+    }
+
+    pub fn set_node_id(&mut self, node_id: String) {
+        if node_id.len() != 8 {
+            panic!(
+                "Configuration error provided `node_id` \
+is not exactly 8 charackters long."
+            );
+        }
+        self.node_id = node_id;
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            server_url: String::default(),
+            initial_remote_addresses: Vec::default(),
+            node_id: String::default(),
+            store_path: Option::default(),
+            sync_with_remotes: 2,
+        }
     }
 }

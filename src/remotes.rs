@@ -7,10 +7,8 @@ use actix::{
 use actix_interop::FutureInterop;
 use rand::seq::SliceRandom;
 
-use crate::{
-    mutations_log::MutationsLogQuery, GraphClient, GraphEdge, GraphMutation,
-    GraphNode, GraphNodeIndex, GraphResponse, StoreError,
-};
+use crate::mutations_log::{MutationsLogMutation, MutationsLogQuery};
+use crate::{GraphClient, GraphEdge, GraphNode, GraphNodeIndex, StoreError};
 
 pub struct SyncRemotesMessage {
     pub from: String,
@@ -19,21 +17,6 @@ pub struct SyncRemotesMessage {
 
 impl Message for SyncRemotesMessage {
     type Result = Result<HashMap<String, bool>, StoreError>;
-}
-
-pub struct SendToNMessage<N, E, I>(pub GraphMutation<N, E, I>)
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static;
-
-impl<N, E, I> Message for SendToNMessage<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    type Result = Result<(), StoreError>;
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +38,7 @@ where
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
     remotes: HashMap<String, RemotesEntry<N, E, I>>,
+    sync_with_n: usize,
 }
 
 impl<N, E, I> Remotes<N, E, I>
@@ -63,15 +47,10 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    // Amount of remote nodes with which to synchronize
-    // mutations before committing them.
-    // TODO: should be configurable as total or 
-    // as fraction of quantity of known remotes
-    const SYNC_WITH_N: u8 = 2;
-
-    pub fn new() -> Self {
+    pub fn new(sync_with_n: usize) -> Self {
         Self {
             remotes: HashMap::new(),
+            sync_with_n,
         }
     }
 }
@@ -85,38 +64,7 @@ where
     type Context = Context<Self>;
 }
 
-impl<N, E, I> Handler<GraphMutation<N, E, I>> for Remotes<N, E, I>
-where
-    N: GraphNode + Unpin + 'static,
-    E: GraphEdge + Unpin + 'static,
-    I: GraphNodeIndex + From<N> + Unpin + 'static,
-{
-    type Result = Result<GraphResponse<N, E, I>, StoreError>;
-
-    fn handle(
-        &mut self,
-        msg: GraphMutation<N, E, I>,
-        _: &mut Self::Context,
-    ) -> Self::Result {
-        for addr in
-            self.remotes
-                .clone()
-                .into_iter()
-                .filter_map(|(_, remotes_entry)| {
-                    remotes_entry
-                        .remotes_log
-                        .ok()
-                        .map(|_| remotes_entry.client_addr)
-                })
-        {
-            addr.do_send(msg.clone())
-        }
-
-        Ok(GraphResponse::Empty)
-    }
-}
-
-impl<N, E, I> Handler<SendToNMessage<N, E, I>> for Remotes<N, E, I>
+impl<N, E, I> Handler<MutationsLogMutation<N, E, I>> for Remotes<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
@@ -127,11 +75,10 @@ where
 
     fn handle(
         &mut self,
-        msg: SendToNMessage<N, E, I>,
+        msg: MutationsLogMutation<N, E, I>,
         _: &mut Self::Context,
     ) -> Self::Result {
-        let graph_mutation = msg.0;
-
+        let sync_with_n = self.sync_with_n.clone();
         let mut rng = rand::thread_rng();
         let random_remotes: Vec<Addr<_>> = self
             .remotes
@@ -146,11 +93,11 @@ where
             .collect();
 
         let future = Box::pin(async move {
-            let random_remotes = random_remotes
-                .choose_multiple(&mut rng, Self::SYNC_WITH_N.into());
+            let random_remotes =
+                random_remotes.choose_multiple(&mut rng, sync_with_n.into());
 
             for addr in random_remotes {
-                addr.send(graph_mutation.clone()).await??;
+                addr.send(msg.clone()).await??;
             }
 
             Ok(())
@@ -330,7 +277,7 @@ where
 {
     type Result = ResponseActFuture<
         Self,
-        Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>,
+        Result<Vec<MutationsLogMutation<N, E, I>>, StoreError>,
     >;
 
     fn handle(
@@ -346,18 +293,20 @@ where
             .collect();
 
         async move {
-            let mut mutations_log_agg = HashMap::new();
+            let mut mutations_log_agg = Vec::new();
 
             for client in clients {
-                let mutations_log =
-                    client.send(MutationsLogQuery::INST).await??;
+                let mut mutations_log =
+                    client.send(MutationsLogQuery::full()).await??;
 
                 // Hashes are generated from contents of GraphMutations
                 // the probability of two hashes actually referring to
                 // different mutations is acceptably low.
-                mutations_log_agg.extend(mutations_log);
+                mutations_log_agg.append(&mut mutations_log);
             }
 
+            mutations_log_agg.sort_by(|a, b| a.hash.cmp(&b.hash));
+            mutations_log_agg.dedup_by(|a, b| a.hash == b.hash);
             Ok(mutations_log_agg)
         }
         .interop_actor_boxed(self)

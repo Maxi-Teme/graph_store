@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use uuid::Uuid;
 
-use graph_db::{GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex};
+use graph_db::{
+    DatabaseConfig, GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex,
+};
 
 #[derive(
     Debug,
@@ -81,12 +83,10 @@ pub async fn setup(
     }
 
     let server_address = format!("http://127.0.0.1:{}", port);
+    let mut database_config = DatabaseConfig::init();
+    database_config.set_store_path(store_path.to_string());
+    database_config.set_server_url(server_address);
+    database_config.set_initial_remote_addresses(initial_remotes);
 
-    GraphDatabase::run(
-        Some(store_path.to_string()),
-        server_address,
-        initial_remotes,
-    )
-    .await
-    .unwrap()
+    GraphDatabase::run(database_config).await.unwrap()
 }

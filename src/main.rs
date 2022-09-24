@@ -2,7 +2,9 @@ use std::env;
 
 use serde::{Deserialize, Serialize};
 
-use graph_db::{GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex};
+use graph_db::{
+    DatabaseConfig, GraphDatabase, GraphEdge, GraphNode, GraphNodeIndex,
+};
 
 #[derive(
     Debug,
@@ -46,35 +48,9 @@ type Database = GraphDatabase<NodeTypes, EdgeType, NodeKey>;
 async fn main() -> Result<(), std::io::Error> {
     env_logger::init();
 
-    let store_path: String =
-        env::var("AGRAPHSTORE_PATH").expect("AGRAPHSTORE_PATH");
-
-    let server_address =
-        env::var("AGRAPHSTORE_SERVER_URL").expect("AGRAPHSTORE_SERVER_URL");
-
-    let initial_remote_addresses: Vec<String> =
-        env::var("AGRAPHSTORE_INITIAL_REMOTE_URLS")
-            .expect("AGRAPHSTORE_INITIAL_REMOTE_URLS")
-            .split(',')
-            .map(String::from)
-            .collect();
-
-    log::info!(
-        "AGRAPHSTORE_PATH: {:?}, \
-AGRAPHSTORE_SERVER_URL: {:?}, \
-AGRAPHSTORE_INITIAL_REMOTE_URLS: {:?}",
-        store_path,
-        server_address,
-        initial_remote_addresses
-    );
-
-    let database = Database::run(
-        Some(store_path),
-        server_address,
-        initial_remote_addresses,
-    )
-    .await
-    .unwrap();
+    let database_config = DatabaseConfig::init();
+    log::debug!("Database config: {:#?}", database_config);
+    let database = Database::run(database_config).await.unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
 

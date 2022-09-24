@@ -7,13 +7,16 @@ use actix::{
 };
 
 use actix_interop::FutureInterop;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::graph::Graph;
-use crate::mutations_log_store::{MutationsLogStore, MutationsLogStoreMessage};
+use crate::mutations_log_store::MutationsLogStore;
 use crate::remotes::Remotes;
+use crate::sync_graph::GraphMutationRequest;
 use crate::{
     GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphResponse,
-    SendToNMessage, StoreError,
+    StoreError,
 };
 
 pub struct MutationsLog<N, E, I>
@@ -22,6 +25,7 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
+    node_id: String,
     graph: Addr<Graph<N, E, I>>,
     remotes: Addr<Remotes<N, E, I>>,
     mutations_log_store: Addr<MutationsLogStore<N, E, I>>,
@@ -47,6 +51,7 @@ where
     // constuctor
 
     pub async fn new(
+        node_id: String,
         graph: Addr<Graph<N, E, I>>,
         remotes: Addr<Remotes<N, E, I>>,
         store_path: Option<String>,
@@ -55,6 +60,7 @@ where
         let pending_mutations_log = HashMap::new();
 
         Ok(Self {
+            node_id,
             graph,
             remotes,
             mutations_log_store,
@@ -65,36 +71,17 @@ where
     pub async fn commit_mutation(
         mutations_log_store_addr: &Addr<MutationsLogStore<N, E, I>>,
         graph_addr: &Addr<Graph<N, E, I>>,
-        graph_mutation: GraphMutation<N, E, I>,
+        graph_mutation_log_entry: MutationsLogMutation<N, E, I>,
     ) -> Result<GraphResponse<N, E, I>, StoreError> {
         mutations_log_store_addr
-            .send(MutationsLogStoreMessage::Commit(graph_mutation.clone()))
+            .send(graph_mutation_log_entry.clone())
             .await??;
 
-        graph_addr.send(graph_mutation).await?
+        graph_addr.send(graph_mutation_log_entry.mutation).await?
     }
 }
 
-pub enum LogMessage<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    Replicated(GraphMutation<N, E, I>),
-    Commit(GraphMutation<N, E, I>),
-}
-
-impl<N, E, I> Message for LogMessage<N, E, I>
-where
-    N: GraphNode + 'static,
-    E: GraphEdge + 'static,
-    I: GraphNodeIndex + From<N> + 'static,
-{
-    type Result = Result<GraphResponse<N, E, I>, StoreError>;
-}
-
-impl<N, E, I> Handler<LogMessage<N, E, I>> for MutationsLog<N, E, I>
+impl<N, E, I> Handler<GraphMutation<N, E, I>> for MutationsLog<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
@@ -105,63 +92,130 @@ where
 
     fn handle(
         &mut self,
-        msg: LogMessage<N, E, I>,
+        msg: GraphMutation<N, E, I>,
         _ctx: &mut Self::Context,
     ) -> Self::Result {
         let remotes = self.remotes.clone();
         let graph = self.graph.clone();
         let mutations_log_store = self.mutations_log_store.clone();
+        let node_id = self.node_id.clone();
+        let mut pending_mutations_log = self.pending_mutations_log.clone();
 
         async move {
-            match msg {
-                LogMessage::Replicated(graph_mutation) => {
-                    mutations_log_store
-                        .send(MutationsLogStoreMessage::Add(
-                            graph_mutation.clone(),
-                        ))
-                        .await??;
+            let hash = msg.get_hash(node_id.clone());
+            pending_mutations_log.insert(hash.clone(), msg.clone());
 
-                    // includes also remotes to which we send
-                    // synchronous mutations
-                    remotes.do_send(graph_mutation.clone());
+            let query = MutationsLogMutation {
+                hash,
+                mutation: msg,
+            };
 
-                    remotes
-                        .send(SendToNMessage(graph_mutation.clone()))
-                        .await??;
+            // includes also remotes to which we send
+            // synchronous mutations
+            remotes.do_send(query.clone());
 
-                    Self::commit_mutation(
-                        &mutations_log_store,
-                        &graph,
-                        graph_mutation,
-                    )
-                    .await
-                }
-                LogMessage::Commit(graph_mutation) => {
-                    Self::commit_mutation(
-                        &mutations_log_store,
-                        &graph,
-                        graph_mutation,
-                    )
-                    .await
-                }
-            }
+            remotes.send(query.clone()).await??;
+
+            Self::commit_mutation(&mutations_log_store, &graph, query).await
         }
         .interop_actor_boxed(self)
     }
 }
 
-pub struct MutationsLogQuery<N, E, I> {
-    phantom_n: PhantomData<N>,
-    phantom_e: PhantomData<E>,
-    phantom_i: PhantomData<I>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(deserialize = "N: DeserializeOwned"))]
+pub struct MutationsLogMutation<N, E, I>
+where
+    N: GraphNode + 'static,
+    E: GraphEdge + 'static,
+    I: GraphNodeIndex + From<N> + 'static,
+{
+    pub hash: String,
+    pub mutation: GraphMutation<N, E, I>,
+}
+
+impl<N, E, I> TryFrom<GraphMutationRequest> for MutationsLogMutation<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Error = StoreError;
+
+    fn try_from(request: GraphMutationRequest) -> Result<Self, Self::Error> {
+        let GraphMutationRequest {
+            graph_mutation,
+            hash,
+        } = request;
+
+        let mutation: GraphMutation<N, E, I> =
+            bincode::deserialize(&graph_mutation)
+                .map_err(|err| StoreError::Serde(err.to_string()))?;
+
+        Ok(Self { hash, mutation })
+    }
+}
+
+impl<N, E, I> TryInto<GraphMutationRequest> for MutationsLogMutation<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Error = StoreError;
+
+    fn try_into(self) -> Result<GraphMutationRequest, Self::Error> {
+        let graph_mutation = bincode::serialize(&self.mutation)
+            .map_err(|err| StoreError::Serde(err.to_string()))?;
+
+        Ok(GraphMutationRequest {
+            hash: self.hash,
+            graph_mutation,
+        })
+    }
+}
+
+impl<N, E, I> Message for MutationsLogMutation<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = Result<(), StoreError>;
+}
+
+impl<N, E, I> Handler<MutationsLogMutation<N, E, I>> for MutationsLog<N, E, I>
+where
+    N: GraphNode + Unpin + 'static,
+    E: GraphEdge + Unpin + 'static,
+    I: GraphNodeIndex + From<N> + Unpin + 'static,
+{
+    type Result = ResponseActFuture<Self, Result<(), StoreError>>;
+
+    fn handle(
+        &mut self,
+        msg: MutationsLogMutation<N, E, I>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let mutations_log_store = self.mutations_log_store.clone();
+        let graph = self.graph.clone();
+
+        async move {
+            Self::commit_mutation(&mutations_log_store, &graph, msg).await?;
+            Ok(())
+        }
+        .interop_actor_boxed(self)
+    }
+}
+
+pub enum MutationsLogQuery<N, E, I> {
+    Full((PhantomData<N>, PhantomData<E>, PhantomData<I>)),
 }
 
 impl<N, E, I> MutationsLogQuery<N, E, I> {
-    pub const INST: MutationsLogQuery<N, E, I> = MutationsLogQuery {
-        phantom_n: PhantomData,
-        phantom_e: PhantomData,
-        phantom_i: PhantomData,
-    };
+    pub fn full() -> Self {
+        Self::Full((PhantomData, PhantomData, PhantomData))
+    }
 }
 
 impl<N, E, I> Message for MutationsLogQuery<N, E, I>
@@ -170,7 +224,7 @@ where
     E: GraphEdge + 'static,
     I: GraphNodeIndex + From<N> + 'static,
 {
-    type Result = Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>;
+    type Result = Result<Vec<MutationsLogMutation<N, E, I>>, StoreError>;
 }
 
 impl<N, E, I> Handler<MutationsLogQuery<N, E, I>> for MutationsLog<N, E, I>
@@ -181,7 +235,7 @@ where
 {
     type Result = ResponseActFuture<
         Self,
-        Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>,
+        Result<Vec<MutationsLogMutation<N, E, I>>, StoreError>,
     >;
 
     fn handle(
@@ -221,13 +275,14 @@ where
         let mut pending_mutations_log = self.pending_mutations_log.clone();
 
         let future = async move {
-            let mutations_log = remotes.send(MutationsLogQuery::INST).await??;
+            let mutations_log_mutations =
+                remotes.send(MutationsLogQuery::full()).await??;
 
-            for (hash, graph_mutation) in mutations_log.into_iter() {
+            for mutation_log_mutation in mutations_log_mutations.into_iter() {
                 if let Err(err) = Self::commit_mutation(
                     &mutations_log_store,
                     &graph,
-                    graph_mutation.clone(),
+                    mutation_log_mutation.clone(),
                 )
                 .await
                 {
@@ -237,7 +292,10 @@ while synchronizing. Error: '{:?}'",
                         err
                     );
 
-                    pending_mutations_log.insert(hash, graph_mutation);
+                    pending_mutations_log.insert(
+                        mutation_log_mutation.hash,
+                        mutation_log_mutation.mutation,
+                    );
                 }
             }
 
