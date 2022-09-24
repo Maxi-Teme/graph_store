@@ -39,7 +39,7 @@ where
     pub async fn run(config: DatabaseConfig) -> Result<Self, StoreError> {
         let graph = Graph::<N, E, I>::new(config.store_path.clone())?.start();
 
-        let remotes = Remotes::new().start();
+        let remotes = Remotes::new(config.sync_with_remotes).start();
 
         let mutations_log = MutationsLog::new(
             config.node_id,

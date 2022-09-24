@@ -6,7 +6,9 @@ use actix::Addr;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use crate::mutations_log::{MutationsLog, MutationsLogQuery, MutationsLogMutation};
+use crate::mutations_log::{
+    MutationsLog, MutationsLogMutation, MutationsLogQuery,
+};
 use crate::remotes::Remotes;
 use crate::sync_graph::sync_graph_server::{SyncGraph, SyncGraphServer};
 use crate::sync_graph::{
@@ -14,8 +16,7 @@ use crate::sync_graph::{
     MutationsLogResponse, RemotesLogRequest, RemotesLogResponse,
 };
 use crate::{
-    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, StoreError,
-    SyncRemotesMessage,
+    GraphEdge, GraphNode, GraphNodeIndex, StoreError, SyncRemotesMessage,
 };
 
 #[derive(Debug)]
@@ -141,11 +142,7 @@ where
             .try_into()
             .map_err(|err: StoreError| Status::internal(err.to_string()))?;
 
-        match self
-            .mutations_log
-            .send(graph_mutation_log_entry)
-            .await
-        {
+        match self.mutations_log.send(graph_mutation_log_entry).await {
             Ok(inner) => match inner {
                 Ok(_) => Ok(Response::new(GraphMutationResponse {})),
                 Err(err) => {

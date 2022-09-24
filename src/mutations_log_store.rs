@@ -1,4 +1,4 @@
-use std::{collections::HashMap, marker::PhantomData};
+use std::marker::PhantomData;
 
 use actix::{Actor, Context, Handler};
 use rusqlite::{params, Connection, Error as SqliteError};
@@ -73,7 +73,7 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<usize, StoreError>;
+    type Result = Result<(), StoreError>;
 
     fn handle(
         &mut self,
@@ -88,7 +88,9 @@ where
                             VALUES (?1, ?2)",
                 params![msg.hash, mutation],
             )
-            .map_err(|err| StoreError::WriteLogError(err.to_string()))
+            .map_err(|err| StoreError::WriteLogError(err.to_string()))?;
+
+        Ok(())
     }
 }
 
@@ -98,7 +100,7 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>;
+    type Result = Result<Vec<MutationsLogMutation<N, E, I>>, StoreError>;
 
     fn handle(
         &mut self,
@@ -121,12 +123,15 @@ where
             })
             .map_err(|err| StoreError::SqliteError(err.to_string()))?;
 
-        let mut mutations_log = HashMap::new();
+        let mut mutations_log = Vec::new();
 
         for row in mutations_log_iter {
             match row {
                 Ok(mutation_entry) => {
-                    mutations_log.insert(mutation_entry.0, mutation_entry.1);
+                    mutations_log.push(MutationsLogMutation {
+                        hash: mutation_entry.0,
+                        mutation: mutation_entry.1,
+                    });
                 }
                 Err(err) => log::error!(
                     "Error while building MutationsLog \

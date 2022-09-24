@@ -7,6 +7,8 @@ use actix::{
 };
 
 use actix_interop::FutureInterop;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::graph::Graph;
 use crate::mutations_log_store::MutationsLogStore;
@@ -101,7 +103,7 @@ where
 
         async move {
             let hash = msg.get_hash(node_id.clone());
-            pending_mutations_log.insert(hash, msg.clone());
+            pending_mutations_log.insert(hash.clone(), msg.clone());
 
             let query = MutationsLogMutation {
                 hash,
@@ -120,7 +122,8 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(deserialize = "N: DeserializeOwned"))]
 pub struct MutationsLogMutation<N, E, I>
 where
     N: GraphNode + 'static,
@@ -178,7 +181,7 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result = Result<GraphResponse<N, E, I>, StoreError>;
+    type Result = Result<(), StoreError>;
 }
 
 impl<N, E, I> Handler<MutationsLogMutation<N, E, I>> for MutationsLog<N, E, I>
@@ -187,8 +190,7 @@ where
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result =
-        ResponseActFuture<Self, Result<GraphResponse<N, E, I>, StoreError>>;
+    type Result = ResponseActFuture<Self, Result<(), StoreError>>;
 
     fn handle(
         &mut self,
@@ -199,8 +201,8 @@ where
         let graph = self.graph.clone();
 
         async move {
-            Self::commit_mutation(&mutations_log_store, &graph, msg)
-                .await
+            Self::commit_mutation(&mutations_log_store, &graph, msg).await?;
+            Ok(())
         }
         .interop_actor_boxed(self)
     }
@@ -271,7 +273,6 @@ where
         let graph = self.graph.clone();
         let mutations_log_store = self.mutations_log_store.clone();
         let mut pending_mutations_log = self.pending_mutations_log.clone();
-        let node_id = self.node_id.clone();
 
         let future = async move {
             let mutations_log_mutations =
@@ -281,7 +282,7 @@ where
                 if let Err(err) = Self::commit_mutation(
                     &mutations_log_store,
                     &graph,
-                    mutation_log_mutation,
+                    mutation_log_mutation.clone(),
                 )
                 .await
                 {

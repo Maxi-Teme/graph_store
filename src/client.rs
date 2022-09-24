@@ -8,16 +8,14 @@ use futures_util::TryFutureExt;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 
-use crate::mutations_log::MutationsLogQuery;
+use crate::mutations_log::{MutationsLogMutation, MutationsLogQuery};
 use crate::sync_graph::sync_graph_client::SyncGraphClient;
 use crate::sync_graph::{
     GraphMutationRequest, MutationsLogRequest, MutationsLogResponse,
     RemotesLogRequest,
 };
-
 use crate::{
-    GraphEdge, GraphMutation, GraphNode, GraphNodeIndex, GraphResponse,
-    StoreError, SyncRemotesMessage,
+    GraphEdge, GraphNode, GraphNodeIndex, StoreError, SyncRemotesMessage,
 };
 
 #[derive(Debug, Clone)]
@@ -73,18 +71,17 @@ where
     }
 }
 
-impl<N, E, I> Handler<GraphMutation<N, E, I>> for GraphClient<N, E, I>
+impl<N, E, I> Handler<MutationsLogMutation<N, E, I>> for GraphClient<N, E, I>
 where
     N: GraphNode + Unpin + 'static,
     E: GraphEdge + Unpin + 'static,
     I: GraphNodeIndex + From<N> + Unpin + 'static,
 {
-    type Result =
-        ResponseActFuture<Self, Result<GraphResponse<N, E, I>, StoreError>>;
+    type Result = ResponseActFuture<Self, Result<(), StoreError>>;
 
     fn handle(
         &mut self,
-        msg: GraphMutation<N, E, I>,
+        msg: MutationsLogMutation<N, E, I>,
         _ctx: &mut Self::Context,
     ) -> Self::Result {
         let mut client = self.client.clone();
@@ -98,7 +95,7 @@ where
                 );
             };
 
-            Ok(GraphResponse::Empty)
+            Ok(())
         }
         .interop_actor_boxed(self)
     }
@@ -156,7 +153,7 @@ where
 {
     type Result = ResponseActFuture<
         Self,
-        Result<HashMap<String, GraphMutation<N, E, I>>, StoreError>,
+        Result<Vec<MutationsLogMutation<N, E, I>>, StoreError>,
     >;
 
     fn handle(

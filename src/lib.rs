@@ -23,7 +23,7 @@ mod server;
 
 pub(crate) use client::GraphClient;
 pub use database::GraphDatabase;
-pub(crate) use remotes::{SyncRemotesMessage};
+pub(crate) use remotes::SyncRemotesMessage;
 use url::Url;
 
 mod sync_graph {
@@ -220,12 +220,13 @@ impl ToString for StoreError {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     server_url: String,
     initial_remote_addresses: Vec<String>,
     node_id: String,
     store_path: Option<String>,
+    sync_with_remotes: usize,
 }
 
 impl DatabaseConfig {
@@ -275,6 +276,16 @@ is not exactly 8 charackters long."
             config.store_path = Some(store_path);
         }
 
+        if let Ok(sync_with_remotes) =
+            env::var("AGRAPHSTORE_SYNCH_WITH_REMOTES_N")
+        {
+            let sync_with_remotes: usize = sync_with_remotes.parse().expect(
+                "Configuration error provided AGRAPHSTORE_SYNCH_WITH_REMOTES_N \
+is not exactly 8 charackters long."
+            );
+            config.sync_with_remotes = sync_with_remotes;
+        }
+
         config
     }
 
@@ -312,5 +323,17 @@ is not exactly 8 charackters long."
             );
         }
         self.node_id = node_id;
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            server_url: String::default(),
+            initial_remote_addresses: Vec::default(),
+            node_id: String::default(),
+            store_path: Option::default(),
+            sync_with_remotes: 2,
+        }
     }
 }
