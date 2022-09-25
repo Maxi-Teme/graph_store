@@ -57,24 +57,18 @@ async fn main() -> Result<(), std::io::Error> {
     {
         if env::var("MAIN").is_ok() {
             database
-                .add_node(
-                    NodeKey(1),
-                    NodeTypes {
-                        id: 1,
-                        name: "First Node".to_string(),
-                    },
-                )
+                .add_node(NodeTypes {
+                    id: 1,
+                    name: "First Node".to_string(),
+                })
                 .await
                 .unwrap();
         } else {
             database
-                .add_node(
-                    NodeKey(2),
-                    NodeTypes {
-                        id: 2,
-                        name: "Second Node".to_string(),
-                    },
-                )
+                .add_node(NodeTypes {
+                    id: 2,
+                    name: "Second Node".to_string(),
+                })
                 .await
                 .unwrap();
         }
@@ -85,24 +79,18 @@ async fn main() -> Result<(), std::io::Error> {
     {
         if env::var("MAIN").is_ok() {
             database
-                .add_node(
-                    NodeKey(3),
-                    NodeTypes {
-                        id: 3,
-                        name: "Third Node".to_string(),
-                    },
-                )
+                .add_node(NodeTypes {
+                    id: 3,
+                    name: "Third Node".to_string(),
+                })
                 .await
                 .unwrap();
         } else {
             database
-                .add_node(
-                    NodeKey(4),
-                    NodeTypes {
-                        id: 4,
-                        name: "Fourth Node".to_string(),
-                    },
-                )
+                .add_node(NodeTypes {
+                    id: 4,
+                    name: "Fourth Node".to_string(),
+                })
                 .await
                 .unwrap();
         }

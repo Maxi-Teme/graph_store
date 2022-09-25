@@ -1,4 +1,4 @@
-use common::{SimpleNodeType, SimpleNodeWeightIndex};
+use common::{Node, NodeId};
 use uuid::Uuid;
 
 mod common;
@@ -39,10 +39,7 @@ async fn test_basic_two_processes() {
 
     let first_node_id = Uuid::new_v4();
     database1
-        .add_node(
-            SimpleNodeWeightIndex(first_node_id.clone()),
-            SimpleNodeType::new(first_node_id.clone()),
-        )
+        .add_node(Node::new(first_node_id.clone()))
         .await
         .unwrap();
 
@@ -53,15 +50,15 @@ async fn test_basic_two_processes() {
     assert_eq!(nodes2.len(), TOTAL_NODES);
     assert_eq!(nodes1, nodes2);
 
-    database1.remove_node(SimpleNodeWeightIndex(first_node_id.clone())).await.unwrap();
+    database1
+        .remove_node(NodeId(first_node_id.clone()))
+        .await
+        .unwrap();
     let nodes1 = database1.get_nodes().await.unwrap();
     assert_eq!(nodes1.len(), TOTAL_NODES - 1);
 
     database1
-        .add_node(
-            SimpleNodeWeightIndex(first_node_id.clone()),
-            SimpleNodeType::new(first_node_id.clone()),
-        )
+        .add_node(Node::new(first_node_id.clone()))
         .await
         .unwrap();
     let nodes1 = database1.get_nodes().await.unwrap();

@@ -1,4 +1,4 @@
-use common::{SimpleNodeType, SimpleNodeWeightIndex};
+use common::Node;
 use uuid::Uuid;
 
 mod common;
@@ -14,19 +14,13 @@ async fn test_initial_data_synchronization() {
 
     let first_node_id = Uuid::new_v4();
     database1
-        .add_node(
-            SimpleNodeWeightIndex(first_node_id.clone()),
-            SimpleNodeType::new(first_node_id.clone()),
-        )
+        .add_node(Node::new(first_node_id.clone()))
         .await
         .unwrap();
 
     let second_node_id = Uuid::new_v4();
     database1
-        .add_node(
-            SimpleNodeWeightIndex(second_node_id.clone()),
-            SimpleNodeType::new(second_node_id.clone()),
-        )
+        .add_node(Node::new(second_node_id.clone()))
         .await
         .unwrap();
 
@@ -57,10 +51,7 @@ async fn test_initial_data_synchronization() {
 
     let third_node_id = Uuid::new_v4();
     database1
-        .add_node(
-            SimpleNodeWeightIndex(third_node_id.clone()),
-            SimpleNodeType::new(third_node_id.clone()),
-        )
+        .add_node(Node::new(third_node_id.clone()))
         .await
         .unwrap();
 

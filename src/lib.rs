@@ -61,7 +61,7 @@ where
 {
     AddEdge((I, I, E)),
     RemoveEdge((I, I)),
-    AddNode((I, N)),
+    AddNode(N),
     RemoveNode(I),
 }
 

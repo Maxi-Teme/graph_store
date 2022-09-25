@@ -19,8 +19,8 @@ use graph_db::{
     Serialize,
     Deserialize,
 )]
-pub struct SimpleEdgeType(pub usize);
-impl GraphEdge for SimpleEdgeType {}
+pub struct Edge(pub usize);
+impl GraphEdge for Edge {}
 
 #[derive(
     Debug,
@@ -35,17 +35,17 @@ impl GraphEdge for SimpleEdgeType {}
     Serialize,
     Deserialize,
 )]
-pub struct SimpleNodeType {
+pub struct Node {
     pub id: Uuid,
 }
 
-impl SimpleNodeType {
+impl Node {
     pub fn new(id: Uuid) -> Self {
         Self { id }
     }
 }
 
-impl GraphNode for SimpleNodeType {}
+impl GraphNode for Node {}
 
 #[derive(
     Debug,
@@ -60,18 +60,17 @@ impl GraphNode for SimpleNodeType {}
     Serialize,
     Deserialize,
 )]
-pub struct SimpleNodeWeightIndex(pub Uuid);
+pub struct NodeId(pub Uuid);
 
-impl GraphNodeIndex for SimpleNodeWeightIndex {}
+impl GraphNodeIndex for NodeId {}
 
-impl From<SimpleNodeType> for SimpleNodeWeightIndex {
-    fn from(node: SimpleNodeType) -> Self {
+impl From<Node> for NodeId {
+    fn from(node: Node) -> Self {
         Self(node.id)
     }
 }
 
-pub type SimpleDatabase =
-    GraphDatabase<SimpleNodeType, SimpleEdgeType, SimpleNodeWeightIndex>;
+pub type SimpleDatabase = GraphDatabase<Node, Edge, NodeId>;
 
 pub async fn setup(
     store_path: &'static str,

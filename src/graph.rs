@@ -60,8 +60,8 @@ where
                 let edge = self.remove_edge(from, to)?;
                 Ok(GraphResponse::Edge(edge))
             }
-            GraphMutation::AddNode((key, node)) => {
-                let node = self.add_node(key, node)?;
+            GraphMutation::AddNode(node) => {
+                let node = self.add_node(node)?;
                 Ok(GraphResponse::Node(node))
             }
             GraphMutation::RemoveNode(key) => {
@@ -205,8 +205,8 @@ where
         }
     }
 
-    fn add_node(&mut self, key: I, node: N) -> Result<N, StoreError> {
-        match self.nodes_map.entry(key) {
+    fn add_node(&mut self, node: N) -> Result<N, StoreError> {
+        match self.nodes_map.entry(node.clone().into()) {
             Entry::Vacant(vacant_entry) => {
                 let mut graph = self.inner.clone();
 
@@ -443,8 +443,8 @@ mod tests {
         Serialize,
         Deserialize,
     )]
-    struct SimpleEdgeType(usize);
-    impl GraphEdge for SimpleEdgeType {}
+    struct Edge(usize);
+    impl GraphEdge for Edge {}
 
     #[derive(
         Debug,
@@ -459,10 +459,8 @@ mod tests {
         Serialize,
         Deserialize,
     )]
-    struct SimpleNodeType {
-        id: Uuid,
-    }
-    impl GraphNode for SimpleNodeType {}
+    struct Node(Uuid);
+    impl GraphNode for Node {}
 
     #[derive(
         Debug,
@@ -477,13 +475,13 @@ mod tests {
         Serialize,
         Deserialize,
     )]
-    struct SimpleNodeWeightIndex(Uuid);
+    struct NodeId(Uuid);
 
-    impl GraphNodeIndex for SimpleNodeWeightIndex {}
+    impl GraphNodeIndex for NodeId {}
 
-    impl From<SimpleNodeType> for SimpleNodeWeightIndex {
-        fn from(node: SimpleNodeType) -> Self {
-            Self(node.id)
+    impl From<Node> for NodeId {
+        fn from(node: Node) -> Self {
+            Self(node.0)
         }
     }
 
@@ -495,20 +493,16 @@ mod tests {
             std::fs::remove_dir_all(test_dir).unwrap();
         }
 
-        let mut graph = Graph::<
-            SimpleNodeType,
-            SimpleEdgeType,
-            SimpleNodeWeightIndex,
-        >::new(Some(test_dir.into()))
-        .unwrap();
+        let mut graph =
+            Graph::<Node, Edge, NodeId>::new(Some(test_dir.into())).unwrap();
 
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
-        let node1 = SimpleNodeType { id: id1 };
-        let node2 = SimpleNodeType { id: id2 };
+        let node1 = Node(id1);
+        let node2 = Node(id2);
 
-        graph.add_node(SimpleNodeWeightIndex(id1), node1).unwrap();
-        graph.add_node(SimpleNodeWeightIndex(id2), node2).unwrap();
+        graph.add_node(node1).unwrap();
+        graph.add_node(node2).unwrap();
 
         let nodes = graph.get_nodes().unwrap();
         assert_eq!(nodes.len(), 2);
@@ -525,20 +519,16 @@ mod tests {
             std::fs::remove_dir_all(test_dir).unwrap();
         }
 
-        let mut graph = Graph::<
-            SimpleNodeType,
-            SimpleEdgeType,
-            SimpleNodeWeightIndex,
-        >::new(Some(test_dir.into()))
-        .unwrap();
+        let mut graph =
+            Graph::<Node, Edge, NodeId>::new(Some(test_dir.into())).unwrap();
 
         let id = Uuid::new_v4();
-        let node = SimpleNodeType { id };
+        let node = Node(id);
 
-        graph.add_node(SimpleNodeWeightIndex(id), node).unwrap();
+        graph.add_node(node).unwrap();
 
         assert_eq!(
-            graph.add_node(SimpleNodeWeightIndex(id), node),
+            graph.add_node(node),
             Err(StoreError::ConflictDuplicateNode)
         );
 
@@ -583,33 +573,56 @@ mod tests {
             }
         }
 
-        let mut graph = Graph::<
-            CombinedNodeType,
-            SimpleEdgeType,
-            CombinedNodeWeightIndex,
-        >::new(Some(test_dir.into()))
-        .unwrap();
+        let mut graph =
+            Graph::<CombinedNodeType, Edge, CombinedNodeWeightIndex>::new(
+                Some(test_dir.into()),
+            )
+            .unwrap();
 
         let label = String::from("some label");
         let id = Uuid::new_v4();
         let node = CombinedNodeType { label, id };
 
-        graph
-            .add_node(
-                CombinedNodeWeightIndex((String::from("some label"), id)),
-                node,
-            )
-            .unwrap();
+        graph.add_node(node).unwrap();
 
-        let result = graph.add_node(
-            CombinedNodeWeightIndex((String::from("some label"), id)),
-            CombinedNodeType {
-                label: String::from("some label"),
-                id,
-            },
-        );
+        let result = graph.add_node(CombinedNodeType {
+            label: String::from("some label"),
+            id,
+        });
 
         assert_eq!(result, Err(StoreError::ConflictDuplicateNode));
+
+        if std::path::Path::new(test_dir).is_dir() {
+            std::fs::remove_dir_all(test_dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_serializing_deserializing_json_ok() {
+        let test_dir = "test-data/test_serializing_deserializing_ok";
+
+        let mut graph =
+            Graph::<Node, Edge, NodeId>::new(Some(test_dir.into())).unwrap();
+
+        let node1 = Node(Uuid::new_v4());
+        let node2 = Node(Uuid::new_v4());
+        let node3 = Node(Uuid::new_v4());
+
+        graph.add_node(node1).unwrap();
+        graph.add_node(node2).unwrap();
+        graph.add_node(node3).unwrap();
+        graph.add_edge(node1.into(), node3.into(), Edge(1)).unwrap();
+        graph.remove_node(node1.into()).unwrap();
+
+        let graph_inner = graph.get_graph().unwrap();
+        let graph_inner_json = serde_json::to_string(&graph_inner).unwrap();
+
+        let deserialized_graph: StableGraph<Node, Edge> =
+            serde_json::from_str(&graph_inner_json).unwrap();
+        let deserialized_graph_json =
+            serde_json::to_string(&deserialized_graph).unwrap();
+
+        assert_eq!(graph_inner_json, deserialized_graph_json);
 
         if std::path::Path::new(test_dir).is_dir() {
             std::fs::remove_dir_all(test_dir).unwrap();

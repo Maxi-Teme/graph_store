@@ -106,19 +106,23 @@ Error: '{err}'"
 
     pub async fn add_edge(
         &self,
-        from: I,
-        to: I,
+        from: impl Into<I>,
+        to: impl Into<I>,
         edge: E,
     ) -> Result<(), StoreError> {
-        let query = GraphMutation::AddEdge((from, to, edge));
+        let query = GraphMutation::AddEdge((from.into(), to.into(), edge));
 
         self.mutations_log.send(query).await??;
 
         Ok(())
     }
 
-    pub async fn remove_edge(&self, from: I, to: I) -> Result<E, StoreError> {
-        let query = GraphMutation::RemoveEdge((from, to));
+    pub async fn remove_edge(
+        &self,
+        from: impl Into<I>,
+        to: impl Into<I>,
+    ) -> Result<E, StoreError> {
+        let query = GraphMutation::RemoveEdge((from.into(), to.into()));
 
         if let GraphResponse::Edge(edge) =
             self.mutations_log.send(query).await??
@@ -133,8 +137,8 @@ Expected mutations_log to return Edge."
         }
     }
 
-    pub async fn add_node(&self, key: I, node: N) -> Result<N, StoreError> {
-        let query = GraphMutation::AddNode((key, node));
+    pub async fn add_node(&self, node: N) -> Result<N, StoreError> {
+        let query = GraphMutation::AddNode(node);
 
         let result = self.mutations_log.send(query).await??;
 
@@ -151,8 +155,11 @@ Expected mutations_log to return Node got {:?}",
         }
     }
 
-    pub async fn remove_node(&self, key: I) -> Result<N, StoreError> {
-        let query = GraphMutation::RemoveNode(key);
+    pub async fn remove_node(
+        &self,
+        node: impl Into<I>,
+    ) -> Result<N, StoreError> {
+        let query = GraphMutation::RemoveNode(node.into());
 
         if let GraphResponse::Node(node) =
             self.mutations_log.send(query).await??

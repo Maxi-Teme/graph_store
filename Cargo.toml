@@ -65,3 +65,6 @@ tonic-build = "0.8"
 [patch.crates-io.petgraph]
 git = "https://github.com/petgraph/petgraph.git"
 branch = "master"
+
+[dev-dependencies]
+serde_json = "1"
