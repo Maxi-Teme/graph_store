@@ -4,10 +4,10 @@ use std::fmt::Debug;
 
 use actix::{Actor, Context, Handler};
 
-use petgraph::stable_graph::{Neighbors, NodeIndex, StableGraph};
+use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::{IntoEdgeReferences, IntoNodeReferences};
-use petgraph::Directed;
 use petgraph::Direction::{Incoming, Outgoing};
+use petgraph::{Directed, Direction};
 
 use crate::graph_store::GraphStore;
 use crate::{
@@ -98,8 +98,12 @@ where
                 let graph = self.retain_nodes(nodes_to_retain)?;
                 Ok(GraphResponse::Graph(graph))
             }
-            GraphQuery::GetNeighbors(key) => {
-                let nodes = self.get_neighbors(&key)?;
+            GraphQuery::GetNeighborsUnd(key) => {
+                let nodes = self.get_neighbors_und(&key)?;
+                Ok(GraphResponse::Nodes(nodes))
+            }
+            GraphQuery::GetNeighborsDir((key, dir)) => {
+                let nodes = self.get_neighbors_dir(&key, dir)?;
                 Ok(GraphResponse::Nodes(nodes))
             }
             GraphQuery::GetEdge((from, to)) => {
@@ -302,8 +306,30 @@ where
         Ok(retained)
     }
 
-    fn get_neighbors(&self, key: &I) -> Result<Vec<N>, StoreError> {
-        let neighbors_idxs = self.get_neighbor_indices(key)?;
+    fn get_neighbors_und(&self, key: &I) -> Result<Vec<N>, StoreError> {
+        let found_node_index =
+            self.nodes_map.get(key).ok_or(StoreError::NodeNotFound)?;
+
+        let neighbors_idxs = self.inner.neighbors_undirected(*found_node_index);
+
+        let neighbors = neighbors_idxs
+            .filter_map(|n| self.inner.node_weight(n))
+            .cloned()
+            .collect();
+
+        Ok(neighbors)
+    }
+
+    fn get_neighbors_dir(
+        &self,
+        key: &I,
+        dir: Direction,
+    ) -> Result<Vec<N>, StoreError> {
+        let found_node_index =
+            self.nodes_map.get(key).ok_or(StoreError::NodeNotFound)?;
+
+        let neighbors_idxs =
+            self.inner.neighbors_directed(*found_node_index, dir);
 
         let neighbors = neighbors_idxs
             .filter_map(|n| self.inner.node_weight(n))
@@ -410,16 +436,6 @@ where
         }
 
         nodes_map
-    }
-
-    fn get_neighbor_indices(
-        &self,
-        key: &I,
-    ) -> Result<Neighbors<E>, StoreError> {
-        let found_node_index =
-            self.nodes_map.get(key).ok_or(StoreError::NodeNotFound)?;
-
-        Ok(self.inner.neighbors(*found_node_index))
     }
 }
 

@@ -4,7 +4,7 @@ use std::str::FromStr;
 use actix::{Actor, Addr};
 
 use petgraph::stable_graph::{NodeIndex, StableGraph};
-use petgraph::Directed;
+use petgraph::{Directed, Direction};
 use url::Url;
 
 use crate::graph::Graph;
@@ -225,8 +225,25 @@ Expected mutations_log to return Graph."
         }
     }
 
-    pub async fn get_neighbors(&self, key: I) -> Result<Vec<N>, StoreError> {
-        let query = GraphQuery::GetNeighbors(key);
+    pub async fn get_neighbors_und(
+        &self,
+        key: I,
+    ) -> Result<Vec<N>, StoreError> {
+        let query = GraphQuery::GetNeighborsUnd(key);
+
+        if let GraphResponse::Nodes(nodes) = self.graph.send(query).await?? {
+            Ok(nodes)
+        } else {
+            Err(StoreError::NodeNotFound)
+        }
+    }
+
+    pub async fn get_neighbors_dir(
+        &self,
+        key: I,
+        dir: Direction,
+    ) -> Result<Vec<N>, StoreError> {
+        let query = GraphQuery::GetNeighborsDir((key, dir));
 
         if let GraphResponse::Nodes(nodes) = self.graph.send(query).await?? {
             Ok(nodes)

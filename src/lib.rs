@@ -9,7 +9,7 @@ use actix::{MailboxError, Message};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use petgraph::stable_graph::{NodeIndex, StableGraph};
-use petgraph::Directed;
+use petgraph::{Directed, Direction};
 
 mod client;
 mod database;
@@ -128,7 +128,8 @@ where
     GetGraph,
     FilterGraph((Option<Vec<N>>, Option<Vec<E>>)),
     RetainNodes(Vec<I>),
-    GetNeighbors(I),
+    GetNeighborsUnd(I),
+    GetNeighborsDir((I, Direction)),
     GetEdge((I, I)),
     GetEdges,
     HasNode(I),
